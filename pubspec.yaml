@@ -1,0 +1,50 @@
+name: discipline_tracker
+description: A habit tracking app with AI coaching
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  
+  # State Management
+  provider: ^6.1.1
+  
+  # Local Storage
+  shared_preferences: ^2.2.2
+  
+  # HTTP for API calls
+  http: ^1.2.0
+  
+  # JSON handling
+  intl: ^0.19.0
+  
+  # File handling
+  path_provider: ^2.1.1
+  file_picker: ^8.1.4
+  
+  # Calendar
+  table_calendar: ^3.0.9
+  
+  # Secure storage for API keys
+  flutter_secure_storage: ^9.0.0
+  
+  # Notifications
+  flutter_local_notifications: ^17.0.0
+  timezone: ^0.9.0
+  
+  # Google Drive Cloud Sync
+  google_sign_in: ^6.2.1
+  googleapis: ^13.2.0
+  extension_google_sign_in_as_googleapis_auth: ^2.0.12
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true

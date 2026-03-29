@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Include all app data in backup -->
+    <include domain="sharedpref" path="."/>
+    <include domain="database" path="."/>
+    <include domain="file" path="."/>
+    
+    <!-- Include flutter_secure_storage data -->
+    <include domain="sharedpref" path="FlutterSecureStorage"/>
+</full-backup-content>
