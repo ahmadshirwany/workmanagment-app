@@ -3,8 +3,15 @@ import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
 import '../providers/app_data_provider.dart';
 
-class StatisticsScreen extends StatelessWidget {
+class StatisticsScreen extends StatefulWidget {
   const StatisticsScreen({super.key});
+
+  @override
+  State<StatisticsScreen> createState() => _StatisticsScreenState();
+}
+
+class _StatisticsScreenState extends State<StatisticsScreen> {
+  String _selectedPeriod = '30d';
 
   @override
   Widget build(BuildContext context) {
@@ -16,22 +23,62 @@ class StatisticsScreen extends StatelessWidget {
       ),
       body: Consumer<AppDataProvider>(
         builder: (context, provider, child) {
-          final stats = provider.getStatistics();
+          final stats = provider.getStatistics(timePeriod: _selectedPeriod);
 
           return SingleChildScrollView(
             padding: const EdgeInsets.all(16),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Time Period Selector
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: SegmentedButton<String>(
+                    segments: const <ButtonSegment<String>>[
+                      ButtonSegment<String>(
+                        value: '7d',
+                        label: Text('7 Days'),
+                        icon: Icon(Icons.calendar_view_week),
+                      ),
+                      ButtonSegment<String>(
+                        value: '30d',
+                        label: Text('30 Days'),
+                        icon: Icon(Icons.calendar_view_month),
+                      ),
+                      ButtonSegment<String>(
+                        value: '90d',
+                        label: Text('90 Days'),
+                        icon: Icon(Icons.calendar_today),
+                      ),
+                      ButtonSegment<String>(
+                        value: 'all',
+                        label: Text('All Time'),
+                        icon: Icon(Icons.history),
+                      ),
+                    ],
+                    selected: <String>{_selectedPeriod},
+                    onSelectionChanged: (Set<String> newSelection) {
+                      setState(() {
+                        _selectedPeriod = newSelection.first;
+                      });
+                    },
+                  ),
+                ),
+                const SizedBox(height: 24),
+                
                 const Icon(
                   Icons.bar_chart,
                   size: 60,
                   color: Color(0xFF4CAF50),
                 ),
                 const SizedBox(height: 16),
-                const Text(
-                  '30-Day Statistics',
-                  style: TextStyle(
+                Text(
+                  _getPeriodLabel(_selectedPeriod),
+                  style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.bold,
                   ),
@@ -64,7 +111,7 @@ class StatisticsScreen extends StatelessWidget {
                   icon: Icons.trending_up,
                   title: 'Consistency Score',
                   value: '${(stats.consistencyScore * 100).toStringAsFixed(1)}%',
-                  subtitle: '${(stats.consistencyScore * stats.daysTracked).round()} days with activity',
+                  subtitle: 'Last 30 days',
                   color: const Color(0xFF00BCD4),
                 ),
                 const SizedBox(height: 12),
@@ -415,6 +462,20 @@ class StatisticsScreen extends StatelessWidget {
       return DateFormat('EEEE, MMM d').format(date);
     } catch (e) {
       return dateString;
+    }
+  }
+
+  String _getPeriodLabel(String period) {
+    switch (period) {
+      case '7d':
+        return '7-Day Statistics';
+      case '90d':
+        return '90-Day Statistics';
+      case 'all':
+        return 'All-Time Statistics';
+      case '30d':
+      default:
+        return '30-Day Statistics';
     }
   }
 

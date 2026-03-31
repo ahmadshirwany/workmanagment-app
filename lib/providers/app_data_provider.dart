@@ -427,8 +427,8 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   // Statistics
-  Statistics getStatistics() {
-    return StatisticsCalculator.calculate(_data.habits, _data.habitData, _data.dailyTasks, _data.workSessions, _data.holidayDates);
+  Statistics getStatistics({String timePeriod = '30d'}) {
+    return StatisticsCalculator.calculate(_data.habits, _data.habitData, _data.dailyTasks, _data.workSessions, _data.holidayDates, timePeriod: timePeriod);
   }
 
   double getDayCompletionRate(String date) {
@@ -445,6 +445,13 @@ class AppDataProvider extends ChangeNotifier {
   Future<void> importData(String filePath) async {
     final importedData = await _storageService.importData(filePath);
     _data = importedData;
+    notifyListeners();
+    await _saveData();
+  }
+
+  // Reset all data
+  Future<void> resetAllData() async {
+    _data = AppData.empty();
     notifyListeners();
     await _saveData();
   }

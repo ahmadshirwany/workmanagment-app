@@ -55,8 +55,9 @@ class _CalendarScreenState extends State<CalendarScreen> {
       ),
       body: Consumer<AppDataProvider>(
         builder: (context, provider, child) {
-          return Column(
-            children: [
+          return SingleChildScrollView(
+            child: Column(
+              children: [
               Container(
                 color: Colors.white,
                 child: TableCalendar(
@@ -204,11 +205,10 @@ class _CalendarScreenState extends State<CalendarScreen> {
               const SizedBox(height: 16),
               
               // Selected day info
-              Expanded(
-                child: Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(16),
-                  child: Card(
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(16),
+                child: Card(
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
@@ -269,8 +269,8 @@ class _CalendarScreenState extends State<CalendarScreen> {
                     ),
                   ),
                 ),
-              ),
             ],
+            ),
           );
         },
       ),

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../services/notification_service.dart';
+import '../providers/app_data_provider.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -120,6 +122,83 @@ class _SettingsScreenState extends State<SettingsScreen> {
         ),
       );
     }
+  }
+
+  Future<void> _confirmResetAllData() async {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Row(
+          children: [
+            Icon(Icons.warning, color: Color(0xFFF44336)),
+            SizedBox(width: 12),
+            Text('Reset All Data'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              '⚠️  This action cannot be undone!',
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: Color(0xFFF44336),
+              ),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'This will permanently delete:',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 8),
+            const Text('• All habits'),
+            const SizedBox(height: 4),
+            const Text('• All daily tasks'),
+            const SizedBox(height: 4),
+            const Text('• All work sessions'),
+            const SizedBox(height: 4),
+            const Text('• All reflections'),
+            const SizedBox(height: 4),
+            const Text('• All goals and notes'),
+            const SizedBox(height: 12),
+            const Text(
+              'Are you sure you want to continue?',
+              style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.pop(context);
+              await context.read<AppDataProvider>().resetAllData();
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('✅ All data has been reset'),
+                    backgroundColor: Color(0xFF4CAF50),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF44336),
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Reset All Data'),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _openBatterySettings() async {
@@ -491,6 +570,54 @@ class _SettingsScreenState extends State<SettingsScreen> {
               ),
             ),
           ],
+
+          const SizedBox(height: 24),
+
+          // Reset Data Section
+          Card(
+            color: const Color(0xFFF44336).withOpacity(0.1),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.delete_forever, color: Color(0xFFF44336)),
+                      SizedBox(width: 8),
+                      Text(
+                        'Danger Zone',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFF44336),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Permanently delete all your data',
+                    style: TextStyle(fontSize: 14),
+                  ),
+                  const SizedBox(height: 12),
+                  SizedBox(
+                    width: double.maxFinite,
+                    child: ElevatedButton.icon(
+                      onPressed: _confirmResetAllData,
+                      icon: const Icon(Icons.warning, size: 20),
+                      label: const Text('Reset All Data'),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFFF44336),
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
 
           const SizedBox(height: 24),
 

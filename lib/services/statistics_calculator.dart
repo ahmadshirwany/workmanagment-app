@@ -6,8 +6,9 @@ class StatisticsCalculator {
     Map<String, Map<String, bool>> habitData,
     Map<String, List<Map<String, dynamic>>> dailyTasks,
     List<Map<String, dynamic>> workSessions,
-    Set<String> holidayDates,
-  ) {
+    Set<String> holidayDates, {
+    String timePeriod = '30d', // '7d', '30d', '90d', 'all'
+  }) {
     if (habits.isEmpty && habitData.isEmpty && dailyTasks.isEmpty && workSessions.isEmpty) {
       return Statistics(
         daysTracked: 0,
@@ -28,18 +29,74 @@ class StatisticsCalculator {
       );
     }
 
-    // Get list of active habits for each date within last 30 days, excluding holidays
-    final dates = habitData.keys.toList()..sort();
-    final last30Days = (dates.length > 30 ? dates.sublist(dates.length - 30) : dates)
+    // Get list of all calendar dates within the selected time period
+    final now = DateTime.now();
+    
+    // Determine number of days based on timePeriod
+    int numDays = 30; // default
+    DateTime periodStart;
+    
+    switch (timePeriod) {
+      case '7d':
+        numDays = 7;
+        periodStart = now.subtract(Duration(days: numDays));
+        break;
+      case '90d':
+        numDays = 90;
+        periodStart = now.subtract(Duration(days: numDays));
+        break;
+      case 'all':
+        // For "all", use the earliest date from the data
+        final dates = habitData.keys.toList()..sort();
+        if (dates.isEmpty) {
+          periodStart = now; // No data, use today
+        } else {
+          periodStart = DateTime.parse(dates.first);
+        }
+        numDays = now.difference(periodStart).inDays + 1;
+        break;
+      case '30d':
+      default:
+        numDays = 30;
+        periodStart = now.subtract(Duration(days: numDays));
+    }
+    
+    final allPeriodDays = <String>[];
+    
+    // If 'all', generate from earliest data to today
+    if (timePeriod == 'all') {
+      DateTime current = periodStart;
+      while (current.isBefore(now) || current.isAtSameMomentAs(now)) {
+        final dateString = '${current.year}-${current.month.toString().padLeft(2, '0')}-${current.day.toString().padLeft(2, '0')}';
+        allPeriodDays.add(dateString);
+        current = current.add(const Duration(days: 1));
+      }
+    } else {
+      // For fixed periods, generate all dates in range
+      for (int i = 0; i < numDays; i++) {
+        final date = periodStart.add(Duration(days: i));
+        final dateString = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+        allPeriodDays.add(dateString);
+      }
+    }
+
+    // Filter out holidays from the period days
+    final periodDays = allPeriodDays
         .where((date) => !holidayDates.contains(date))
         .toList();
-    final daysTracked = last30Days.length;
+    
+    // Days tracked = only days in period where we have tracked data
+    final dates = habitData.keys.toList()..sort();
+    final trackedDatesInPeriod = dates
+        .where((date) => periodDays.contains(date))
+        .toList();
+    final daysTracked = trackedDatesInPeriod.length;
 
     // Calculate overall completion rate
     int totalChecked = 0;
     int totalPossible = 0;
     
-    for (final date in last30Days) {
+    for (final date in periodDays) {
       final dayData = habitData[date] ?? {};
       // Get only habits that were active on this date
       final activeHabits = _getActiveHabitsForDate(habits, date);
@@ -59,7 +116,7 @@ class StatisticsCalculator {
     for (final habit in habits) {
       final habitName = habit['name'] as String;
       int count = 0;
-      for (final date in last30Days) {
+      for (final date in periodDays) {
         // Only count if habit was active on this date
         if (_isHabitActiveOnDate(habit, date) && habitData[date]?[habitName] == true) {
           count++;
@@ -72,7 +129,7 @@ class StatisticsCalculator {
     int totalDailyTasks = 0;
     int completedDailyTasks = 0;
     
-    for (final date in last30Days) {
+    for (final date in periodDays) {
       final tasks = dailyTasks[date] ?? [];
       totalDailyTasks += tasks.length;
       completedDailyTasks += tasks.where((task) => task['completed'] == true).length;
@@ -94,7 +151,7 @@ class StatisticsCalculator {
     // Find most productive day (most habits + tasks completed)
     String? mostProductiveDay;
     int maxProductivity = 0;
-    for (final date in last30Days) {
+    for (final date in periodDays) {
       final dayData = habitData[date] ?? {};
       final activeHabits = _getActiveHabitsForDate(habits, date);
       final habitCompletion = activeHabits.where((h) => dayData[h] == true).length;
@@ -115,7 +172,7 @@ class StatisticsCalculator {
     };
     final dayNames = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
     
-    for (final date in last30Days) {
+    for (final date in periodDays) {
       final dateTime = DateTime.parse(date);
       final dayOfWeek = dateTime.weekday - 1; // 0=Monday, 6=Sunday
       
@@ -129,12 +186,12 @@ class StatisticsCalculator {
       weeklyBreakdown[dayNames[dayOfWeek]] = (weeklyBreakdown[dayNames[dayOfWeek]] ?? 0) + habitCompletion + taskCompletion;
     }
 
-    // Calculate consistency score (percentage of days with at least one completion)
+    // Calculate consistency score (percentage of all period calendar days with at least one completion - excluding holidays)
     int daysWithActivity = 0;
-    for (final date in last30Days) {
+    for (final date in periodDays) {
       final dayData = habitData[date] ?? {};
       final activeHabits = _getActiveHabitsForDate(habits, date);
-      final hasHabitCompletion = activeHabits.any((h) => dayData[h] == true);
+      final hasHabitCompletion = activeHabits.isNotEmpty && activeHabits.any((h) => dayData[h] == true);
       
       final tasks = dailyTasks[date] ?? [];
       final hasTaskCompletion = tasks.any((task) => task['completed'] == true);
@@ -143,7 +200,8 @@ class StatisticsCalculator {
         daysWithActivity++;
       }
     }
-    final consistencyScore = daysTracked > 0 ? daysWithActivity / daysTracked : 0.0;
+    // Consistency score is based on % of period calendar days (excluding holidays) with ANY activity
+    final consistencyScore = periodDays.isNotEmpty ? daysWithActivity / periodDays.length : 0.0;
 
     // Calculate streaks (excluding holidays)
     final sortedDates = habitData.keys.toList()..sort();
