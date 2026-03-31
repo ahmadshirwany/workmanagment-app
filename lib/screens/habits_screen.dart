@@ -1,7 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import 'package:share_plus/share_plus.dart';
 import '../providers/app_data_provider.dart';
+import '../providers/ai_coach_provider.dart';
+import '../providers/gamification_provider.dart';
+import '../providers/home_navigation_provider.dart';
+import '../services/shareable_wins_service.dart';
+import 'achievements_screen.dart';
 
 class HabitsScreen extends StatefulWidget {
   const HabitsScreen({super.key});
@@ -13,7 +20,10 @@ class HabitsScreen extends StatefulWidget {
 class _HabitsScreenState extends State<HabitsScreen> {
   final TextEditingController _habitController = TextEditingController();
   final TextEditingController _taskController = TextEditingController();
+  final ShareableWinsService _shareableWinsService = ShareableWinsService();
   late DateTime _selectedDate;
+  bool _isGeneratingShare = false;
+  String? _lastMotivationRequestDate;
 
   @override
   void initState() {
@@ -259,6 +269,325 @@ class _HabitsScreenState extends State<HabitsScreen> {
     );
   }
 
+  void _openAchievementsScreen() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => const AchievementsScreen(),
+      ),
+    );
+  }
+
+  void _openShareWinsSheet() {
+    if (_isGeneratingShare) return;
+
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'Shareable Wins',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Generate a social-ready PNG card and open native share sheet.',
+                  style: TextStyle(color: Colors.grey[700]),
+                ),
+                const SizedBox(height: 12),
+                ...ShareWinCardType.values.map((type) {
+                  return ListTile(
+                    leading: Icon(type.icon),
+                    title: Text(type.title),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () {
+                      Navigator.of(sheetContext).pop();
+                      _generateShareCard(type);
+                    },
+                  );
+                }),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _generateShareCard(ShareWinCardType type) async {
+    if (_isGeneratingShare) return;
+
+    setState(() {
+      _isGeneratingShare = true;
+    });
+
+    try {
+      final provider = context.read<AppDataProvider>();
+      final gamificationProvider = context.read<GamificationProvider>();
+      final monthlyStats = provider.getStatistics(timePeriod: '30d');
+      final weeklyStats = provider.getStatistics(timePeriod: '7d');
+
+      final data = ShareWinCardData(
+        streakDays: monthlyStats.currentStreak,
+        level: gamificationProvider.currentLevel,
+        xp: gamificationProvider.currentXp,
+        disciplineScore: gamificationProvider.currentDisciplineScore.value,
+        weeklyCompletedTasks: weeklyStats.completedDailyTasks,
+        weeklyTotalTasks: weeklyStats.totalDailyTasks,
+        weeklyTaskCompletionRate: weeklyStats.dailyTaskCompletionRate,
+        weeklyWorkHours: weeklyStats.totalWorkTimeSeconds / 3600.0,
+        weeklyMaintenanceDays:
+            gamificationProvider.getMaintenanceActiveDays(days: 7),
+      );
+
+      final filePath = await _shareableWinsService.generateWinCard(
+        type: type,
+        data: data,
+      );
+
+      if (!mounted) return;
+      await _openNativeShareSheet(type, filePath);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not generate share card: $e'),
+          backgroundColor: const Color(0xFFE65100),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isGeneratingShare = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openNativeShareSheet(
+    ShareWinCardType type,
+    String filePath,
+  ) async {
+    try {
+      await Share.shareXFiles(
+        [XFile(filePath)],
+        subject: 'Discipline Tracker • ${type.title}',
+        text: _shareCaption(type),
+      );
+
+      if (!mounted) return;
+      _showShareOpenedMessage(type, filePath);
+    } catch (_) {
+      if (!mounted) return;
+      _showShareUnavailableMessage(type, filePath);
+    }
+  }
+
+  String _shareCaption(ShareWinCardType type) {
+    switch (type) {
+      case ShareWinCardType.streakWin:
+        return 'Daily grind update: another streak win unlocked.';
+      case ShareWinCardType.levelUp:
+        return 'Level up unlocked. Sharing my progress today.';
+      case ShareWinCardType.disciplineScore:
+        return 'Latest discipline score snapshot from my tracker.';
+      case ShareWinCardType.weeklyReport:
+        return 'Weekly report generated. Small actions, big momentum.';
+    }
+  }
+
+  void _showShareOpenedMessage(ShareWinCardType type, String filePath) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 4),
+          backgroundColor: const Color(0xFF2E7D32),
+          content: Text(
+            '${type.title} card ready. Share sheet opened.\nSaved at: $filePath',
+          ),
+        ),
+      );
+  }
+
+  void _maybeEnsureDailyMotivation(
+    AppDataProvider appDataProvider,
+    AICoachProvider aiCoachProvider,
+  ) {
+    if (!aiCoachProvider.isInitialized || aiCoachProvider.isLoading) return;
+
+    final today = appDataProvider.getTodayDateString();
+    final currentDate = aiCoachProvider.dailyMotivation['date'] as String?;
+
+    if (currentDate == today) {
+      _lastMotivationRequestDate = today;
+      return;
+    }
+
+    if (_lastMotivationRequestDate == today) return;
+    _lastMotivationRequestDate = today;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      context.read<AICoachProvider>().ensureDailyMotivationForToday();
+    });
+  }
+
+  Future<void> _openCoachFromMotivation(
+    AppDataProvider appDataProvider,
+    AICoachProvider aiCoachProvider,
+  ) async {
+    final weakHabit = appDataProvider.getWeakestHabitName(timePeriod: '30d') ??
+        'my weakest habit';
+    final motivation =
+        (aiCoachProvider.dailyMotivation['message'] as String? ?? '').trim();
+
+    final contextPrompt = motivation.isEmpty
+        ? 'Help me build a practical plan for today to improve $weakHabit.'
+        : 'My daily motivation says: "$motivation". Turn this into a concrete plan for today focused on $weakHabit.';
+
+    aiCoachProvider.setPendingCoachContext(contextPrompt);
+    await aiCoachProvider.markDailyMotivationSeen();
+
+    if (!mounted) return;
+    context.read<HomeNavigationProvider>().requestTab(2);
+  }
+
+  Future<void> _dismissMotivationCard(AICoachProvider aiCoachProvider) async {
+    await aiCoachProvider.markDailyMotivationSeen();
+  }
+
+  Widget _buildDailyMotivationCard(
+    AppDataProvider appDataProvider,
+    AICoachProvider aiCoachProvider,
+  ) {
+    final data = aiCoachProvider.dailyMotivation;
+    final message = (data['message'] as String? ?? '').trim();
+    final isPositive = data['isPositive'] == true;
+    final source = (data['source'] as String? ?? 'local').toUpperCase();
+
+    if (message.isEmpty) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: isPositive
+              ? const [Color(0xFF1E88E5), Color(0xFF26A69A)]
+              : const [Color(0xFF6D4C41), Color(0xFF8D6E63)],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.12),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.bolt, color: Colors.white),
+              const SizedBox(width: 8),
+              const Expanded(
+                child: Text(
+                  'Daily Motivation',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 15,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.22),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  source,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 10,
+                    fontWeight: FontWeight.w600,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            message,
+            style: const TextStyle(
+              color: Colors.white,
+              height: 1.35,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              ElevatedButton.icon(
+                onPressed: () => _openCoachFromMotivation(
+                  appDataProvider,
+                  aiCoachProvider,
+                ),
+                icon: const Icon(Icons.psychology_alt, size: 18),
+                label: const Text('Ask Coach'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF1565C0),
+                  elevation: 0,
+                ),
+              ),
+              const SizedBox(width: 8),
+              TextButton(
+                onPressed: () => _dismissMotivationCard(aiCoachProvider),
+                child: const Text(
+                  'Dismiss',
+                  style: TextStyle(color: Colors.white),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showShareUnavailableMessage(ShareWinCardType type, String filePath) {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 5),
+          backgroundColor: const Color(0xFFEF6C00),
+          content: Text(
+            'Share sheet unavailable. ${type.title} card saved at:\n$filePath',
+          ),
+        ),
+      );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -266,19 +595,64 @@ class _HabitsScreenState extends State<HabitsScreen> {
         title: const Text('Daily Tasks'),
         backgroundColor: Theme.of(context).colorScheme.primary,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(
+            icon: _isGeneratingShare
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.white,
+                    ),
+                  )
+                : const Icon(Icons.ios_share),
+            onPressed: _isGeneratingShare ? null : _openShareWinsSheet,
+            tooltip: 'Share Wins',
+          ),
+          IconButton(
+            icon: const Icon(Icons.military_tech),
+            onPressed: _openAchievementsScreen,
+            tooltip: 'Achievements',
+          ),
+        ],
       ),
-      body: Consumer<AppDataProvider>(
-        builder: (context, provider, child) {
+      body: Consumer3<AppDataProvider, GamificationProvider, AICoachProvider>(
+        builder: (context, provider, gamificationProvider, aiCoachProvider, child) {
           if (provider.isLoading) {
             return const Center(child: CircularProgressIndicator());
           }
 
+          _maybeEnsureDailyMotivation(provider, aiCoachProvider);
+
           final selectedDateString = _formatDate(_selectedDate);
           final activeHabitNames = provider.getActiveHabitsForDate(selectedDateString);
           final dailyTasks = provider.getDailyTasks(selectedDateString);
+          final disciplineScore = gamificationProvider.currentDisciplineScore.value;
+          final level = gamificationProvider.currentLevel;
+          final currentXp = gamificationProvider.currentXp;
+          final xpToNext = gamificationProvider.xpToNextLevel;
+          final levelProgress = gamificationProvider.levelProgress;
+          final maintenanceRate = gamificationProvider.getMaintenanceRate(days: 7);
+          final maintenanceDays = gamificationProvider.getMaintenanceActiveDays(days: 7);
 
-          return Column(
+          return ListView(
+            padding: const EdgeInsets.only(bottom: 24),
             children: [
+              _buildGamificationPanel(
+                context,
+                disciplineScore: disciplineScore,
+                level: level,
+                currentXp: currentXp,
+                xpToNext: xpToNext,
+                levelProgress: levelProgress,
+                maintenanceRate: maintenanceRate,
+                maintenanceDays: maintenanceDays,
+              ),
+
+              if (aiCoachProvider.shouldShowDailyMotivationCard)
+                _buildDailyMotivationCard(provider, aiCoachProvider),
+
               // Date Selector
               Card(
                 margin: const EdgeInsets.all(16),
@@ -324,7 +698,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
                   ),
                 ),
               ),
-              
+
               // Holiday Toggle
               Consumer<AppDataProvider>(
                 builder: (context, provider, child) {
@@ -386,12 +760,12 @@ class _HabitsScreenState extends State<HabitsScreen> {
                   );
                 },
               ),
-              
+
               const SizedBox(height: 8),
-              
-              Expanded(
-                child: ListView(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
+
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Column(
                   children: [
                     // HABITS Section
                     Row(
@@ -412,7 +786,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    
+
                     if (activeHabitNames.isEmpty)
                       Card(
                         child: Padding(
@@ -473,9 +847,9 @@ class _HabitsScreenState extends State<HabitsScreen> {
                           ),
                         );
                       }),
-                    
+
                     const SizedBox(height: 24),
-                    
+
                     // DAILY TASKS Section
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -495,7 +869,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    
+
                     if (dailyTasks.isEmpty)
                       Card(
                         child: Padding(
@@ -551,7 +925,6 @@ class _HabitsScreenState extends State<HabitsScreen> {
                           ),
                         );
                       }),
-                    
                     const SizedBox(height: 80),
                   ],
                 ),
@@ -559,6 +932,285 @@ class _HabitsScreenState extends State<HabitsScreen> {
             ],
           );
         },
+      ),
+    );
+  }
+
+  Widget _buildGamificationPanel(
+    BuildContext context, {
+    required double disciplineScore,
+    required int level,
+    required int currentXp,
+    required int xpToNext,
+    required double levelProgress,
+    required double maintenanceRate,
+    required int maintenanceDays,
+  }) {
+    final safeScore = disciplineScore.clamp(0, 100).toDouble();
+    final scoreColor = safeScore >= 90
+        ? const Color(0xFF00C853)
+        : safeScore >= 70
+            ? const Color(0xFF4CAF50)
+            : safeScore >= 50
+                ? const Color(0xFFFFB300)
+                : const Color(0xFFFF7043);
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          colors: [
+            Color(0xFF1E88E5),
+            Color(0xFF26A69A),
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF1E88E5).withOpacity(0.25),
+            blurRadius: 14,
+            offset: const Offset(0, 6),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  'Level $level',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 14,
+                  ),
+                ),
+              ),
+              const Spacer(),
+              const Icon(Icons.military_tech, color: Colors.white),
+              const SizedBox(width: 6),
+              Text(
+                '$currentXp XP',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Discipline Score',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '${safeScore.toStringAsFixed(1)}%',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (safeScore > 90)
+                      const Text(
+                        'Elite momentum!',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    const SizedBox(height: 16),
+                    Text(
+                      xpToNext > 0
+                          ? '$xpToNext XP to next level'
+                          : 'Max level reached',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(999),
+                      child: LinearProgressIndicator(
+                        value: levelProgress.clamp(0.0, 1.0),
+                        minHeight: 10,
+                        backgroundColor: Colors.white.withOpacity(0.25),
+                        valueColor: const AlwaysStoppedAnimation<Color>(
+                          Color(0xFFFFF176),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 12),
+              _buildScoreRing(
+                score: safeScore,
+                ringColor: scoreColor,
+                size: 118,
+                strokeWidth: 14,
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _buildMaintenanceRing(
+                value: maintenanceRate,
+                size: 54,
+                strokeWidth: 9,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      '7-Day Maintenance',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$maintenanceDays active days hitting 20+ XP',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.95),
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScoreRing({
+    required double score,
+    required Color ringColor,
+    required double size,
+    required double strokeWidth,
+  }) {
+    final ratio = (score / 100).clamp(0.0, 1.0);
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          PieChart(
+            PieChartData(
+              startDegreeOffset: -90,
+              centerSpaceRadius: (size / 2) - strokeWidth,
+              sectionsSpace: 0,
+              borderData: FlBorderData(show: false),
+              sections: [
+                PieChartSectionData(
+                  value: ratio * 100,
+                  color: ringColor,
+                  radius: strokeWidth,
+                  title: '',
+                ),
+                PieChartSectionData(
+                  value: (1 - ratio) * 100,
+                  color: const Color(0x33FFFFFF),
+                  radius: strokeWidth,
+                  title: '',
+                ),
+              ],
+            ),
+            swapAnimationDuration: const Duration(milliseconds: 700),
+          ),
+          Text(
+            '${score.round()}%',
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMaintenanceRing({
+    required double value,
+    required double size,
+    required double strokeWidth,
+  }) {
+    final ratio = value.clamp(0.0, 1.0);
+
+    return SizedBox(
+      width: size,
+      height: size,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          PieChart(
+            PieChartData(
+              startDegreeOffset: -90,
+              centerSpaceRadius: (size / 2) - strokeWidth,
+              sectionsSpace: 0,
+              borderData: FlBorderData(show: false),
+              sections: [
+                PieChartSectionData(
+                  value: ratio * 100,
+                  color: const Color(0xFFFFF176),
+                  radius: strokeWidth,
+                  title: '',
+                ),
+                PieChartSectionData(
+                  value: (1 - ratio) * 100,
+                  color: const Color(0x33FFFFFF),
+                  radius: strokeWidth,
+                  title: '',
+                ),
+              ],
+            ),
+            swapAnimationDuration: const Duration(milliseconds: 700),
+          ),
+          Text(
+            '${(ratio * 100).round()}%',
+            style: const TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              fontSize: 11,
+            ),
+          ),
+        ],
       ),
     );
   }

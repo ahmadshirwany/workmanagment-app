@@ -239,6 +239,162 @@ Make recommendations specific, measurable, and tied to their actual data. Use em
     return await _callGeminiApi(apiKey, prompt);
   }
 
+  Future<String> generatePersonalizedChallenge({
+    required List<String> habitNames,
+    required int currentStreak,
+    required double habitCompletionRate,
+    required double weeklyWorkHours,
+    required double taskCompletionRate,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final prompt = '''
+Create one personalized, realistic 30-day discipline challenge for this user.
+
+User snapshot:
+- Current streak: $currentStreak days
+- Habit completion rate: ${(habitCompletionRate * 100).toStringAsFixed(1)}%
+- Weekly focus hours (avg): ${weeklyWorkHours.toStringAsFixed(1)}
+- Daily task completion rate: ${(taskCompletionRate * 100).toStringAsFixed(1)}%
+- Current habits: ${habitNames.isEmpty ? 'No habits defined yet' : habitNames.join(', ')}
+
+Rules:
+- Keep challenge concise, specific, and measurable.
+- Make it hard but achievable in 30 days.
+- Include a clear daily or weekly target.
+- End with one short motivational line.
+
+Output format:
+Title: ...
+Challenge: ...
+How to track: ...
+Motivation: ...
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateContextualChatReply({
+    required String userMessage,
+    required Map<String, dynamic> context,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final prompt = '''
+You are an addictive but healthy AI productivity coach.
+Your style: personal, direct, warm, actionable, never generic.
+
+Live context:
+- Date: ${context['date']}
+- Current streak: ${context['streak']}
+- Longest streak: ${context['longestStreak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- 7-day maintenance days: ${context['maintenanceDays']}/7
+- Weekly task completion: ${context['weeklyTaskCompletionRate']}
+- Weekly work hours: ${context['weeklyWorkHours']}
+- Weakest habit: ${context['weakHabit']}
+- Active challenge: ${context['activeChallenge']}
+- Recent reflections: ${context['recentReflections']}
+- Last coach messages: ${context['lastChatMessages']}
+
+User message:
+$userMessage
+
+Instructions:
+1. Reply in 3-6 short lines.
+2. Reference at least one concrete data point from context.
+3. End with one immediate next step for today.
+4. Keep tone motivating and practical.
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateQuickActionResponse({
+    required String actionType,
+    required String actionPrompt,
+    required Map<String, dynamic> context,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final roastSafety = actionType == 'roast_lazy_day'
+        ? 'For roast mode: keep it playful, funny, and kind. No insults, shame, or demotivating language.'
+        : 'Keep it sharp, positive, and data-aware.';
+
+    final prompt = '''
+You are an AI Coach in a discipline tracker app.
+Action type: $actionType
+Requested action: $actionPrompt
+
+User context:
+- Streak: ${context['streak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- Weak habit: ${context['weakHabit']}
+- Active challenge: ${context['activeChallenge']}
+- Recent reflections: ${context['recentReflections']}
+- Last messages: ${context['lastChatMessages']}
+
+Rules:
+- Use the context; do not be generic.
+- Keep response concise: 4-7 short lines.
+- Include one clear action item for today.
+- $roastSafety
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateDailyMotivation(Map<String, dynamic> context) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final reflections = (context['recentReflections'] as List<dynamic>? ?? const [])
+        .map((item) => item.toString())
+        .where((text) => text.trim().isNotEmpty)
+        .toList();
+
+    final prompt = '''
+Create a highly personalized daily motivation card message for this user.
+This should feel like a coach that deeply knows them.
+
+Context snapshot:
+- Date: ${context['date']}
+- Current streak: ${context['streak']}
+- Longest streak: ${context['longestStreak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- Maintenance status (7 days): ${context['maintenanceDays']}/7
+- Weekly task completion: ${context['weeklyTaskCompletionRate']}
+- Weekly work hours: ${context['weeklyWorkHours']}
+- Active challenge: ${context['activeChallenge']}
+- Weak habit: ${context['weakHabit']}
+- Last 3 chat lines: ${context['lastChatMessages']}
+- Recent reflections: ${reflections.join(' | ')}
+
+Output requirements:
+1. 2-4 concise motivational lines.
+2. Must mention at least one real metric above.
+3. Include one concrete next step for today.
+4. Encouraging, actionable, never generic.
+5. If user has no strong history, use a warm onboarding tone.
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
   Future<String> _callGeminiApi(String apiKey, String prompt) async {
     final url = Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey',

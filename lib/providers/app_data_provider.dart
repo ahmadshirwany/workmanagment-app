@@ -1,13 +1,20 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import '../models/app_data.dart';
 import '../services/storage_service.dart';
 import '../services/statistics_calculator.dart';
 import '../models/statistics.dart';
 
+typedef GamificationEventHandler = Future<void> Function(
+  String eventType,
+  Map<String, dynamic> payload,
+);
+
 class AppDataProvider extends ChangeNotifier {
   AppData _data = AppData.empty();
   final StorageService _storageService = StorageService();
   bool _isLoading = true;
+  GamificationEventHandler? _gamificationEventHandler;
 
   AppData get data => _data;
   bool get isLoading => _isLoading;
@@ -28,6 +35,18 @@ class AppDataProvider extends ChangeNotifier {
 
   Future<void> _saveData() async {
     await _storageService.saveData(_data);
+  }
+
+  void setGamificationEventHandler(GamificationEventHandler? handler) {
+    _gamificationEventHandler = handler;
+  }
+
+  Future<void> _emitGamificationEvent(
+    String eventType,
+    Map<String, dynamic> payload,
+  ) async {
+    if (_gamificationEventHandler == null) return;
+    await _gamificationEventHandler!(eventType, payload);
   }
 
   // Habit operations
@@ -149,11 +168,20 @@ class AppDataProvider extends ChangeNotifier {
     }
     
     final currentValue = updatedHabitData[date]![habitName] ?? false;
-    updatedHabitData[date]![habitName] = !currentValue;
+    final nextValue = !currentValue;
+    updatedHabitData[date]![habitName] = nextValue;
     
     _data = _data.copyWith(habitData: updatedHabitData);
     notifyListeners();
     _saveData();
+
+    if (nextValue) {
+      unawaited(_emitGamificationEvent('habit_completed', {
+        'habitName': habitName,
+        'date': date,
+        'hour': DateTime.now().hour,
+      }));
+    }
   }
 
   bool isHabitCompleted(String habitName, String date) {
@@ -225,11 +253,22 @@ class AppDataProvider extends ChangeNotifier {
   // Reflection operations
   void saveReflection(String date, String reflection) {
     final updatedReflections = Map<String, String>.from(_data.reflections);
+    final existingReflection = updatedReflections[date] ?? '';
+    final hasContent = reflection.trim().isNotEmpty;
+    final isNewEntry = existingReflection.trim().isEmpty && hasContent;
     updatedReflections[date] = reflection;
     
     _data = _data.copyWith(reflections: updatedReflections);
     notifyListeners();
     _saveData();
+
+    if (hasContent) {
+      unawaited(_emitGamificationEvent('reflection_saved', {
+        'date': date,
+        'isNewEntry': isNewEntry,
+        'hasContent': hasContent,
+      }));
+    }
   }
 
   String getReflection(String date) {
@@ -316,13 +355,19 @@ class AppDataProvider extends ChangeNotifier {
 
   void toggleDailyTask(String date, String taskId) {
     final updatedDailyTasks = Map<String, List<Map<String, dynamic>>>.from(_data.dailyTasks);
+    bool toggledToCompleted = false;
     
     if (updatedDailyTasks.containsKey(date)) {
       updatedDailyTasks[date] = updatedDailyTasks[date]!.map((task) {
         if (task['id'] == taskId) {
+          final currentCompleted = task['completed'] as bool? ?? false;
+          final nextCompleted = !currentCompleted;
+          if (nextCompleted) {
+            toggledToCompleted = true;
+          }
           return {
             ...task,
-            'completed': !(task['completed'] as bool),
+            'completed': nextCompleted,
           };
         }
         return task;
@@ -332,6 +377,13 @@ class AppDataProvider extends ChangeNotifier {
     _data = _data.copyWith(dailyTasks: updatedDailyTasks);
     notifyListeners();
     _saveData();
+
+    if (toggledToCompleted) {
+      unawaited(_emitGamificationEvent('task_completed', {
+        'taskId': taskId,
+        'date': date,
+      }));
+    }
   }
 
   // Work Session operations
@@ -369,6 +421,14 @@ class AppDataProvider extends ChangeNotifier {
     );
     notifyListeners();
     _saveData();
+
+    final endTimeString = sessionData['endTime'] as String?;
+    final endHour = DateTime.tryParse(endTimeString ?? '')?.hour ?? DateTime.now().hour;
+    unawaited(_emitGamificationEvent('work_session_completed', {
+      'date': sessionData['date'] as String? ?? getTodayDateString(),
+      'duration': (sessionData['duration'] as num?)?.toInt() ?? 0,
+      'endHour': endHour,
+    }));
   }
 
   Map<String, dynamic>? getActiveWorkSession() {
@@ -468,6 +528,86 @@ class AppDataProvider extends ChangeNotifier {
     _data = data;
     notifyListeners();
     await _saveData();
+  }
+
+  Future<void> updateGamificationData({
+    int? xp,
+    int? level,
+    List<Map<String, dynamic>>? achievements,
+    List<Map<String, dynamic>>? xpTransactions,
+    Map<String, dynamic>? disciplineScore,
+    Map<String, dynamic>? gamificationMeta,
+    Map<String, int>? gamificationCounters,
+    Map<String, int>? dailyXp,
+  }) async {
+    _data = _data.copyWith(
+      xp: xp,
+      level: level,
+      achievements: achievements,
+      xpTransactions: xpTransactions,
+      disciplineScore: disciplineScore,
+      gamificationMeta: gamificationMeta,
+      gamificationCounters: gamificationCounters,
+      dailyXp: dailyXp,
+    );
+    notifyListeners();
+    await _saveData();
+  }
+
+  Future<void> updateAiCoachData({
+    List<Map<String, dynamic>>? aiHistory,
+    Map<String, dynamic>? aiCoachMeta,
+    Map<String, dynamic>? dailyMotivation,
+  }) async {
+    _data = _data.copyWith(
+      aiHistory: aiHistory,
+      aiCoachMeta: aiCoachMeta,
+      dailyMotivation: dailyMotivation,
+    );
+    notifyListeners();
+    await _saveData();
+  }
+
+  List<String> getRecentReflectionEntries({int limit = 5}) {
+    final sorted = _data.reflections.entries.toList()
+      ..sort((a, b) => b.key.compareTo(a.key));
+
+    return sorted
+        .map((entry) => entry.value.trim())
+        .where((text) => text.isNotEmpty)
+        .take(limit)
+        .toList();
+  }
+
+  String? getWeakestHabitName({String timePeriod = '30d'}) {
+    final stats = getStatistics(timePeriod: timePeriod);
+    if (stats.habitCompletionCounts.isEmpty) return null;
+
+    String? weakestHabit;
+    int? minCount;
+
+    for (final entry in stats.habitCompletionCounts.entries) {
+      final value = entry.value;
+      if (minCount == null || value < minCount) {
+        minCount = value;
+        weakestHabit = entry.key;
+      }
+    }
+
+    return weakestHabit;
+  }
+
+  void recordAiCoachConversation() {
+    unawaited(_emitGamificationEvent('ai_conversation', {
+      'date': getTodayDateString(),
+    }));
+  }
+
+  void recordWeeklyChallengeCompletion({int bonusXp = 200}) {
+    unawaited(_emitGamificationEvent('weekly_challenge_completed', {
+      'date': getTodayDateString(),
+      'bonusXp': bonusXp,
+    }));
   }
 
   // Get current data for cloud sync
