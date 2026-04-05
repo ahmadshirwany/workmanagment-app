@@ -178,20 +178,41 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
     }
   }
 
-  Future<void> _saveApiKey(AICoachProvider coach) async {
+  Future<bool> _saveApiKey(AICoachProvider coach) async {
     final raw = _apiKeyController.text.trim();
-    if (raw.isEmpty) return;
+    if (raw.isEmpty) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a Gemini API key first.'),
+          backgroundColor: Color(0xFFD32F2F),
+        ),
+      );
+      return false;
+    }
 
-    await coach.saveApiKey(raw);
-    _apiKeyController.clear();
+    try {
+      await coach.saveApiKey(raw);
+      _apiKeyController.clear();
 
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('API key saved.'),
-        backgroundColor: Color(0xFF2E7D32),
-      ),
-    );
+      if (!mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('API key saved.'),
+          backgroundColor: Color(0xFF2E7D32),
+        ),
+      );
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save API key: $e'),
+          backgroundColor: const Color(0xFFD32F2F),
+        ),
+      );
+      return false;
+    }
   }
 
   Future<void> _confirmClearHistory(AICoachProvider coach) async {
@@ -271,8 +292,9 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
-                _saveApiKey(coach);
+              onPressed: () async {
+                final saved = await _saveApiKey(coach);
+                if (!context.mounted || !saved) return;
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(

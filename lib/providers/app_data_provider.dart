@@ -55,6 +55,70 @@ class AppDataProvider extends ChangeNotifier {
     return '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   }
 
+  String _formatDate(DateTime date) {
+    return '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+  }
+
+  DateTime _toDateOnly(DateTime date) {
+    return DateTime(date.year, date.month, date.day);
+  }
+
+  DateTime _parseDateOnly(String date) {
+    final parsed = DateTime.tryParse(date);
+    if (parsed == null) {
+      return getBusinessTodayDate();
+    }
+    return _toDateOnly(parsed);
+  }
+
+  DateTime getBusinessTodayDate() {
+    final now = DateTime.now();
+    final businessNow = now.hour < 6
+        ? now.subtract(const Duration(days: 1))
+        : now;
+    return _toDateOnly(businessNow);
+  }
+
+  String getBusinessDateString() {
+    return _formatDate(getBusinessTodayDate());
+  }
+
+  int getDayOffsetFromBusinessToday(String date) {
+    return _parseDateOnly(date).difference(getBusinessTodayDate()).inDays;
+  }
+
+  bool canEditHabitsForDate(String date) {
+    return getDayOffsetFromBusinessToday(date) == 0;
+  }
+
+  bool canEditTasksForDate(String date) {
+    return getDayOffsetFromBusinessToday(date) == 0;
+  }
+
+  bool canEditWorkSessionForDate(String date) {
+    return getDayOffsetFromBusinessToday(date) == 0;
+  }
+
+  bool canToggleVacationForDate(String date) {
+    final offset = getDayOffsetFromBusinessToday(date);
+    return offset >= -7 && offset <= 7;
+  }
+
+  String getRestrictionMessage({required String domain, required String date}) {
+    if (domain == 'vacation') {
+      return 'Vacation toggle is only available from 7 days before to 7 days after today.';
+    }
+
+    final offset = getDayOffsetFromBusinessToday(date);
+    if (offset < 0) {
+      return 'Past dates are read-only after 6:00 AM. Only vacation can be toggled for the last 7 days.';
+    }
+    if (offset > 0) {
+      return 'Future dates are read-only. Only vacation can be toggled for the next 7 days.';
+    }
+    return 'This action is currently locked.';
+  }
+
   // Get habits active for a specific date
   List<String> getActiveHabitsForDate(String date) {
     return _data.habits
@@ -86,8 +150,10 @@ class AppDataProvider extends ChangeNotifier {
 
   void addHabit(String habitName) {
     if (habitName.trim().isEmpty) return;
+
+    if (!canEditHabitsForDate(getBusinessDateString())) return;
     
-    final today = getTodayDateString();
+    final today = getBusinessDateString();
     _data = _data.copyWith(
       habits: [
         ..._data.habits,
@@ -104,10 +170,12 @@ class AppDataProvider extends ChangeNotifier {
 
   void updateHabit(String oldHabitName, String newHabitName) {
     if (newHabitName.trim().isEmpty || oldHabitName == newHabitName.trim()) return;
+
+    if (!canEditHabitsForDate(getBusinessDateString())) return;
     
-    final today = getTodayDateString();
-    final yesterday = DateTime.now().subtract(const Duration(days: 1));
-    final yesterdayString = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+    final today = getBusinessDateString();
+    final yesterdayString =
+        _formatDate(getBusinessTodayDate().subtract(const Duration(days: 1)));
     
     // End the old habit (set endDate to yesterday so it doesn't appear from today onwards)
     final updatedHabits = _data.habits.map((habit) {
@@ -138,9 +206,11 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void removeHabit(String habitName) {
+    if (!canEditHabitsForDate(getBusinessDateString())) return;
+
     // Set end date to yesterday so the habit disappears from today
-    final yesterday = DateTime.now().subtract(const Duration(days: 1));
-    final yesterdayString = '${yesterday.year}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+    final yesterdayString =
+        _formatDate(getBusinessTodayDate().subtract(const Duration(days: 1)));
     
     // Update the habit to set its end date to yesterday
     final updatedHabits = _data.habits.map((habit) {
@@ -161,6 +231,8 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void toggleHabit(String habitName, String date) {
+    if (!canEditHabitsForDate(date)) return;
+
     final updatedHabitData = Map<String, Map<String, bool>>.from(_data.habitData);
     
     if (!updatedHabitData.containsKey(date)) {
@@ -226,6 +298,8 @@ class AppDataProvider extends ChangeNotifier {
 
   // Holiday operations
   void toggleHoliday(String date) {
+    if (!canToggleVacationForDate(date)) return;
+
     final updatedHolidayDates = Set<String>.from(_data.holidayDates);
     
     if (updatedHolidayDates.contains(date)) {
@@ -295,6 +369,8 @@ class AppDataProvider extends ChangeNotifier {
 
   void addDailyTask(String date, String taskName) {
     if (taskName.trim().isEmpty) return;
+
+    if (!canEditTasksForDate(date)) return;
     
     final updatedDailyTasks = Map<String, List<Map<String, dynamic>>>.from(_data.dailyTasks);
     
@@ -315,6 +391,8 @@ class AppDataProvider extends ChangeNotifier {
 
   void updateDailyTask(String date, String taskId, String newTaskName) {
     if (newTaskName.trim().isEmpty) return;
+
+    if (!canEditTasksForDate(date)) return;
     
     final updatedDailyTasks = Map<String, List<Map<String, dynamic>>>.from(_data.dailyTasks);
     
@@ -336,6 +414,8 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void removeDailyTask(String date, String taskId) {
+    if (!canEditTasksForDate(date)) return;
+
     final updatedDailyTasks = Map<String, List<Map<String, dynamic>>>.from(_data.dailyTasks);
     
     if (updatedDailyTasks.containsKey(date)) {
@@ -354,6 +434,8 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void toggleDailyTask(String date, String taskId) {
+    if (!canEditTasksForDate(date)) return;
+
     final updatedDailyTasks = Map<String, List<Map<String, dynamic>>>.from(_data.dailyTasks);
     bool toggledToCompleted = false;
     
@@ -391,7 +473,7 @@ class AppDataProvider extends ChangeNotifier {
     _data = _data.copyWith(
       activeWorkSession: {
         'startTime': startTime.toIso8601String(),
-        'date': getTodayDateString(),
+        'date': getBusinessDateString(),
       },
     );
     notifyListeners();
@@ -400,11 +482,14 @@ class AppDataProvider extends ChangeNotifier {
 
   void updateActiveWorkSessionStartTime(DateTime newStartTime) {
     if (_data.activeWorkSession == null) return;
+
+    final activeDate = _data.activeWorkSession!['date'] as String?;
+    if (activeDate != null && !canEditWorkSessionForDate(activeDate)) return;
     
     _data = _data.copyWith(
       activeWorkSession: {
         'startTime': newStartTime.toIso8601String(),
-        'date': getTodayDateString(),
+        'date': activeDate ?? getBusinessDateString(),
       },
     );
     notifyListeners();
@@ -412,8 +497,21 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void stopWorkSession(Map<String, dynamic> sessionData) {
+    final isStoppingActiveSession = _data.activeWorkSession != null;
+    final sessionDate = (_data.activeWorkSession?['date'] as String?) ??
+        (sessionData['date'] as String?) ??
+        getBusinessDateString();
+    if (!isStoppingActiveSession && !canEditWorkSessionForDate(sessionDate)) {
+      return;
+    }
+
+    final normalizedSessionData = {
+      ...sessionData,
+      'date': sessionDate,
+    };
+
     final updatedSessions = List<Map<String, dynamic>>.from(_data.workSessions);
-    updatedSessions.add(sessionData);
+    updatedSessions.add(normalizedSessionData);
     
     _data = _data.copyWith(
       workSessions: updatedSessions,
@@ -425,8 +523,8 @@ class AppDataProvider extends ChangeNotifier {
     final endTimeString = sessionData['endTime'] as String?;
     final endHour = DateTime.tryParse(endTimeString ?? '')?.hour ?? DateTime.now().hour;
     unawaited(_emitGamificationEvent('work_session_completed', {
-      'date': sessionData['date'] as String? ?? getTodayDateString(),
-      'duration': (sessionData['duration'] as num?)?.toInt() ?? 0,
+      'date': sessionDate,
+      'duration': (normalizedSessionData['duration'] as num?)?.toInt() ?? 0,
       'endHour': endHour,
     }));
   }
@@ -447,10 +545,13 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void deleteWorkSession(Map<String, dynamic> sessionToDelete) {
+    final sessionDate = sessionToDelete['date'] as String?;
+    if (sessionDate == null || !canEditWorkSessionForDate(sessionDate)) return;
+
     final updatedSessions = _data.workSessions
         .where((session) => 
-            session['start'] != sessionToDelete['start'] || 
-            session['end'] != sessionToDelete['end'])
+        session['startTime'] != sessionToDelete['startTime'] || 
+        session['endTime'] != sessionToDelete['endTime'])
         .toList();
     
     _data = _data.copyWith(workSessions: updatedSessions);
@@ -459,6 +560,14 @@ class AppDataProvider extends ChangeNotifier {
   }
 
   void updateWorkSession(Map<String, dynamic> oldSession, Map<String, dynamic> newSession) {
+    final oldDate = oldSession['date'] as String?;
+    final newDate = newSession['date'] as String?;
+    if (oldDate == null || newDate == null) return;
+    if (!canEditWorkSessionForDate(oldDate) ||
+        !canEditWorkSessionForDate(newDate)) {
+      return;
+    }
+
     final updatedSessions = _data.workSessions.map((session) {
       // Match by startTime and endTime to find the session to update
       if (session['startTime'] == oldSession['startTime'] && 

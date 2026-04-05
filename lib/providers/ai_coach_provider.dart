@@ -210,12 +210,16 @@ class AICoachProvider extends ChangeNotifier {
       );
       await saveConversation();
     } catch (e) {
+      final errorMessage = _buildAiErrorMessage(
+        e,
+        fallback:
+            'I could not reach the AI service right now. Your chat is saved locally, and we can continue offline.',
+      );
       _appendMessage(
         AIChatMessage(
           id: _uuid.v4(),
           role: 'assistant',
-          content:
-              'I could not reach the AI service right now. Your chat is saved locally, and we can continue offline.',
+          content: errorMessage,
           timestamp: DateTime.now(),
           type: 'error',
         ),
@@ -267,12 +271,16 @@ class AICoachProvider extends ChangeNotifier {
       );
       await saveConversation();
     } catch (e) {
+      final errorMessage = _buildAiErrorMessage(
+        e,
+        fallback:
+            'Could not fetch a quick action response right now. Try again in a moment.',
+      );
       _appendMessage(
         AIChatMessage(
           id: _uuid.v4(),
           role: 'assistant',
-          content:
-              'Could not fetch a quick action response right now. Try again in a moment.',
+          content: errorMessage,
           timestamp: DateTime.now(),
           type: 'error',
         ),
@@ -649,5 +657,35 @@ class AICoachProvider extends ChangeNotifier {
     }
 
     return 'You are closer than you think. Prioritize $weakHabit early today, finish one meaningful task, and let the streak carry the rest.';
+  }
+
+  String _buildAiErrorMessage(
+    Object error, {
+    required String fallback,
+  }) {
+    final raw = error.toString().replaceFirst('Exception: ', '').trim();
+    final normalized = raw.toLowerCase();
+
+    if (normalized.contains('api key not configured')) {
+      return 'No API key is currently available on this device. Tap the key icon to save your Gemini API key.';
+    }
+
+    if (normalized.contains('api key was rejected') ||
+        (normalized.contains('api key') &&
+            (normalized.contains('invalid') || normalized.contains('restricted')))) {
+      return 'Your API key was rejected on this device. In Google AI Studio, use a valid key with Generative Language API access, then save it again.';
+    }
+
+    if (normalized.contains('quota')) {
+      return 'Gemini quota is currently exhausted for this key. Please try again later or use another key.';
+    }
+
+    if (normalized.contains('internet') ||
+        normalized.contains('network') ||
+        normalized.contains('timed out')) {
+      return 'Network issue while contacting Gemini. Check your internet connection and try again.';
+    }
+
+    return '$fallback\n\nDetails: $raw';
   }
 }

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
@@ -14,13 +16,15 @@ class WorkTimeScreen extends StatefulWidget {
 
 class _WorkTimeScreenState extends State<WorkTimeScreen> {
   late WorkTimeService _workTimeService;
+  Timer? _businessDayBoundaryTimer;
   late DateTime _selectedDate;
 
   @override
   void initState() {
     super.initState();
-    _selectedDate = DateTime.now();
+    _selectedDate = context.read<AppDataProvider>().getBusinessTodayDate();
     _workTimeService = WorkTimeService();
+    _scheduleBusinessDayBoundaryRefresh();
     
     // Check if there's an active session to resume
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -40,8 +44,38 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
 
   @override
   void dispose() {
+    _businessDayBoundaryTimer?.cancel();
     _workTimeService.dispose();
     super.dispose();
+  }
+
+  void _scheduleBusinessDayBoundaryRefresh() {
+    _businessDayBoundaryTimer?.cancel();
+    final now = DateTime.now();
+    var nextBoundary = DateTime(now.year, now.month, now.day, 6);
+    if (!now.isBefore(nextBoundary)) {
+      nextBoundary = nextBoundary.add(const Duration(days: 1));
+    }
+
+    _businessDayBoundaryTimer = Timer(nextBoundary.difference(now), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedDate = context.read<AppDataProvider>().getBusinessTodayDate();
+      });
+      _scheduleBusinessDayBoundaryRefresh();
+    });
+  }
+
+  void _showRestrictionMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFE65100),
+        ),
+      );
   }
 
   void _show45MinuteNotification() {
@@ -89,6 +123,17 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
 
   void _startWork() {
     final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditWorkSessionForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(
+          domain: 'work_sessions',
+          date: selectedDateString,
+        ),
+      );
+      return;
+    }
+
     _workTimeService.start();
     provider.startWorkSession(DateTime.now());
   }
@@ -111,6 +156,18 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
 
   void _editCurrentSession() {
     if (!_workTimeService.isRunning) return;
+
+    final provider = context.read<AppDataProvider>();
+    final activeDate = provider.getActiveWorkSession()?['date'] as String?;
+    if (activeDate != null && !provider.canEditWorkSessionForDate(activeDate)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(
+          domain: 'work_sessions',
+          date: activeDate,
+        ),
+      );
+      return;
+    }
 
     final currentStartTime = _workTimeService.startTime;
     if (currentStartTime == null) return;
@@ -215,6 +272,18 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
   }
 
   void _showManualEntryDialog() {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditWorkSessionForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(
+          domain: 'work_sessions',
+          date: selectedDateString,
+        ),
+      );
+      return;
+    }
+
     TimeOfDay? startTime;
     TimeOfDay? endTime;
     final dateController = TextEditingController(
@@ -375,7 +444,18 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                     'date': _formatDate(selectedDate),
                   };
 
-                  final provider = context.read<AppDataProvider>();
+                  if (!provider.canEditWorkSessionForDate(
+                    sessionData['date'] as String,
+                  )) {
+                    _showRestrictionMessage(
+                      provider.getRestrictionMessage(
+                        domain: 'work_sessions',
+                        date: sessionData['date'] as String,
+                      ),
+                    );
+                    return;
+                  }
+
                   provider.stopWorkSession(sessionData);
                   
                   Navigator.pop(context);
@@ -404,6 +484,18 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
   }
 
   void _showEditSessionDialog(Map<String, dynamic> existingSession) {
+    final provider = context.read<AppDataProvider>();
+    final existingDate = existingSession['date'] as String?;
+    if (existingDate == null || !provider.canEditWorkSessionForDate(existingDate)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(
+          domain: 'work_sessions',
+          date: existingDate ?? _formatDate(_selectedDate),
+        ),
+      );
+      return;
+    }
+
     final originalStartTime = DateTime.parse(existingSession['startTime'] as String);
     final originalEndTime = DateTime.parse(existingSession['endTime'] as String);
     final sessionDate = DateTime.parse(existingSession['date'] as String);
@@ -567,7 +659,21 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                     'date': _formatDate(selectedDate),
                   };
 
-                  final provider = context.read<AppDataProvider>();
+                  if (!provider.canEditWorkSessionForDate(
+                        updatedSession['date'] as String,
+                      ) ||
+                      !provider.canEditWorkSessionForDate(
+                        existingSession['date'] as String,
+                      )) {
+                    _showRestrictionMessage(
+                      provider.getRestrictionMessage(
+                        domain: 'work_sessions',
+                        date: updatedSession['date'] as String,
+                      ),
+                    );
+                    return;
+                  }
+
                   provider.updateWorkSession(existingSession, updatedSession);
                   
                   Navigator.pop(context);
@@ -623,7 +729,14 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
           final sessions = provider.getWorkSessionsForDate(selectedDateString);
           final totalSeconds = provider.getTotalWorkTimeForDate(selectedDateString);
           final totalDuration = Duration(seconds: totalSeconds);
-          final isToday = selectedDateString == provider.getTodayDateString();
+          final isBusinessToday =
+            provider.canEditWorkSessionForDate(selectedDateString);
+          final showStopwatchSection =
+            isBusinessToday || _workTimeService.isRunning;
+          final activeSessionDate =
+            provider.getActiveWorkSession()?['date'] as String?;
+          final canEditActiveSession = activeSessionDate != null &&
+            provider.canEditWorkSessionForDate(activeSessionDate);
 
           return Column(
             children: [
@@ -673,8 +786,8 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                 ),
               ),
 
-              // Stopwatch Section (only show for today)
-              if (isToday) ...[
+              // Stopwatch Section (always visible while running, editable on business-today)
+              if (showStopwatchSection) ...[
                 Card(
                   margin: const EdgeInsets.symmetric(horizontal: 16),
                   child: Padding(
@@ -710,7 +823,9 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                                   width: double.infinity,
                                   height: 56,
                                   child: ElevatedButton.icon(
-                                    onPressed: _workTimeService.isRunning ? _stopWork : _startWork,
+                                    onPressed: _workTimeService.isRunning
+                                        ? _stopWork
+                                        : (isBusinessToday ? _startWork : null),
                                     icon: Icon(_workTimeService.isRunning ? Icons.stop : Icons.play_arrow),
                                     label: Text(
                                       _workTimeService.isRunning ? 'Stop Work' : 'Start Work',
@@ -719,7 +834,9 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                                     style: ElevatedButton.styleFrom(
                                       backgroundColor: _workTimeService.isRunning 
                                           ? const Color(0xFFF44336) 
-                                          : const Color(0xFF4CAF50),
+                                          : (isBusinessToday
+                                              ? const Color(0xFF4CAF50)
+                                              : Colors.grey),
                                       foregroundColor: Colors.white,
                                       shape: RoundedRectangleBorder(
                                         borderRadius: BorderRadius.circular(12),
@@ -730,7 +847,17 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                                 if (_workTimeService.isRunning) ...[
                                   const SizedBox(height: 12),
                                   OutlinedButton.icon(
-                                    onPressed: _editCurrentSession,
+                                    onPressed: canEditActiveSession
+                                        ? _editCurrentSession
+                                        : () {
+                                            _showRestrictionMessage(
+                                              provider.getRestrictionMessage(
+                                                domain: 'work_sessions',
+                                                date: activeSessionDate ??
+                                                    selectedDateString,
+                                              ),
+                                            );
+                                          },
                                     icon: const Icon(Icons.edit),
                                     label: const Text('Edit Start Time'),
                                     style: OutlinedButton.styleFrom(
@@ -808,7 +935,7 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                       child: sessions.isEmpty
                           ? Center(
                               child: Text(
-                                isToday 
+                                isBusinessToday 
                                     ? 'No work sessions yet today.\nTap "Start Work" to begin tracking.'
                                     : 'No work sessions on this day.',
                                 textAlign: TextAlign.center,
@@ -823,9 +950,68 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                               itemCount: sessions.length,
                               itemBuilder: (context, index) {
                                 final session = sessions[index];
+                                final sessionDate =
+                                    session['date'] as String? ?? selectedDateString;
+                                final canEditSession =
+                                    provider.canEditWorkSessionForDate(sessionDate);
                                 final startTime = DateTime.parse(session['startTime'] as String);
                                 final endTime = DateTime.parse(session['endTime'] as String);
                                 final duration = Duration(seconds: session['duration'] as int);
+
+                                final sessionCard = Card(
+                                  margin: const EdgeInsets.only(bottom: 8),
+                                  child: ListTile(
+                                    leading: Container(
+                                      padding: const EdgeInsets.all(8),
+                                      decoration: BoxDecoration(
+                                        color: const Color(0xFF00BCD4)
+                                            .withOpacity(0.1),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: const Icon(
+                                        Icons.work_history,
+                                        color: Color(0xFF00BCD4),
+                                      ),
+                                    ),
+                                    title: Text(
+                                      _workTimeService.formatDuration(duration),
+                                      style: const TextStyle(
+                                        fontSize: 18,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    subtitle: Text(
+                                      '${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}',
+                                    ),
+                                    trailing: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Text(
+                                          '${duration.inMinutes} min',
+                                          style: TextStyle(
+                                            color: Colors.grey[600],
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        IconButton(
+                                          icon: const Icon(Icons.edit, size: 20),
+                                          color: const Color(0xFF00BCD4),
+                                          onPressed: canEditSession
+                                              ? () =>
+                                                  _showEditSessionDialog(session)
+                                              : null,
+                                          padding: EdgeInsets.zero,
+                                          constraints: const BoxConstraints(),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                );
+
+                                if (!canEditSession) {
+                                  return sessionCard;
+                                }
 
                                 return Dismissible(
                                   key: Key('${session['startTime']}_${session['endTime']}'),
@@ -878,52 +1064,7 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
                                       ),
                                     );
                                   },
-                                  child: Card(
-                                    margin: const EdgeInsets.only(bottom: 8),
-                                    child: ListTile(
-                                      leading: Container(
-                                        padding: const EdgeInsets.all(8),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF00BCD4).withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: const Icon(
-                                          Icons.work_history,
-                                          color: Color(0xFF00BCD4),
-                                        ),
-                                      ),
-                                      title: Text(
-                                        _workTimeService.formatDuration(duration),
-                                        style: const TextStyle(
-                                          fontSize: 18,
-                                          fontWeight: FontWeight.bold,
-                                        ),
-                                      ),
-                                      subtitle: Text(
-                                        '${DateFormat('h:mm a').format(startTime)} - ${DateFormat('h:mm a').format(endTime)}',
-                                      ),
-                                      trailing: Row(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            '${duration.inMinutes} min',
-                                            style: TextStyle(
-                                              color: Colors.grey[600],
-                                              fontWeight: FontWeight.w500,
-                                            ),
-                                          ),
-                                          const SizedBox(width: 8),
-                                          IconButton(
-                                            icon: const Icon(Icons.edit, size: 20),
-                                            color: const Color(0xFF00BCD4),
-                                            onPressed: () => _showEditSessionDialog(session),
-                                            padding: EdgeInsets.zero,
-                                            constraints: const BoxConstraints(),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
+                                  child: sessionCard,
                                 );
                               },
                             ),
@@ -936,7 +1077,20 @@ class _WorkTimeScreenState extends State<WorkTimeScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showManualEntryDialog,
+        onPressed: () {
+          final provider = context.read<AppDataProvider>();
+          final selectedDateString = _formatDate(_selectedDate);
+          if (!provider.canEditWorkSessionForDate(selectedDateString)) {
+            _showRestrictionMessage(
+              provider.getRestrictionMessage(
+                domain: 'work_sessions',
+                date: selectedDateString,
+              ),
+            );
+            return;
+          }
+          _showManualEntryDialog();
+        },
         backgroundColor: const Color(0xFF00BCD4),
         foregroundColor: Colors.white,
         icon: const Icon(Icons.add),

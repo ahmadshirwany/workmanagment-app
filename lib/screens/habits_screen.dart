@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:provider/provider.dart';
@@ -21,6 +23,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
   final TextEditingController _habitController = TextEditingController();
   final TextEditingController _taskController = TextEditingController();
   final ShareableWinsService _shareableWinsService = ShareableWinsService();
+  Timer? _businessDayBoundaryTimer;
   late DateTime _selectedDate;
   bool _isGeneratingShare = false;
   String? _lastMotivationRequestDate;
@@ -28,14 +31,45 @@ class _HabitsScreenState extends State<HabitsScreen> {
   @override
   void initState() {
     super.initState();
-    _selectedDate = DateTime.now();
+    _selectedDate = context.read<AppDataProvider>().getBusinessTodayDate();
+    _scheduleBusinessDayBoundaryRefresh();
   }
 
   @override
   void dispose() {
+    _businessDayBoundaryTimer?.cancel();
     _habitController.dispose();
     _taskController.dispose();
     super.dispose();
+  }
+
+  void _scheduleBusinessDayBoundaryRefresh() {
+    _businessDayBoundaryTimer?.cancel();
+    final now = DateTime.now();
+    var nextBoundary = DateTime(now.year, now.month, now.day, 6);
+    if (!now.isBefore(nextBoundary)) {
+      nextBoundary = nextBoundary.add(const Duration(days: 1));
+    }
+
+    _businessDayBoundaryTimer = Timer(nextBoundary.difference(now), () {
+      if (!mounted) return;
+      setState(() {
+        _selectedDate = context.read<AppDataProvider>().getBusinessTodayDate();
+      });
+      _scheduleBusinessDayBoundaryRefresh();
+    });
+  }
+
+  void _showRestrictionMessage(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: const Color(0xFFE65100),
+        ),
+      );
   }
 
   String _formatDate(DateTime date) {
@@ -69,6 +103,15 @@ class _HabitsScreenState extends State<HabitsScreen> {
   }
 
   void _showAddHabitDialog() {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditHabitsForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'habits', date: selectedDateString),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) {
@@ -102,15 +145,32 @@ class _HabitsScreenState extends State<HabitsScreen> {
   }
 
   void _addHabit() {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditHabitsForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'habits', date: selectedDateString),
+      );
+      return;
+    }
+
     if (_habitController.text.trim().isNotEmpty) {
-      Provider.of<AppDataProvider>(context, listen: false)
-          .addHabit(_habitController.text.trim());
+      provider.addHabit(_habitController.text.trim());
       _habitController.clear();
       Navigator.pop(context);
     }
   }
 
   void _showAddTaskDialog() {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditTasksForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'tasks', date: selectedDateString),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) {
@@ -146,14 +206,30 @@ class _HabitsScreenState extends State<HabitsScreen> {
   void _addTask() {
     if (_taskController.text.trim().isNotEmpty) {
       final dateString = _formatDate(_selectedDate);
-      Provider.of<AppDataProvider>(context, listen: false)
-          .addDailyTask(dateString, _taskController.text.trim());
+      final provider = context.read<AppDataProvider>();
+      if (!provider.canEditTasksForDate(dateString)) {
+        _showRestrictionMessage(
+          provider.getRestrictionMessage(domain: 'tasks', date: dateString),
+        );
+        return;
+      }
+
+      provider.addDailyTask(dateString, _taskController.text.trim());
       _taskController.clear();
       Navigator.pop(context);
     }
   }
 
   void _showEditHabitDialog(String oldHabitName) {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditHabitsForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'habits', date: selectedDateString),
+      );
+      return;
+    }
+
     _habitController.text = oldHabitName;
     showDialog(
       context: context,
@@ -188,15 +264,31 @@ class _HabitsScreenState extends State<HabitsScreen> {
   }
 
   void _updateHabit(String oldHabitName) {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditHabitsForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'habits', date: selectedDateString),
+      );
+      return;
+    }
+
     if (_habitController.text.trim().isNotEmpty) {
-      Provider.of<AppDataProvider>(context, listen: false)
-          .updateHabit(oldHabitName, _habitController.text.trim());
+      provider.updateHabit(oldHabitName, _habitController.text.trim());
       _habitController.clear();
       Navigator.pop(context);
     }
   }
 
   void _showEditTaskDialog(String date, String taskId, String oldTaskName) {
+    final provider = context.read<AppDataProvider>();
+    if (!provider.canEditTasksForDate(date)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'tasks', date: date),
+      );
+      return;
+    }
+
     _taskController.text = oldTaskName;
     showDialog(
       context: context,
@@ -231,15 +323,31 @@ class _HabitsScreenState extends State<HabitsScreen> {
   }
 
   void _updateTask(String date, String taskId) {
+    final provider = context.read<AppDataProvider>();
+    if (!provider.canEditTasksForDate(date)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'tasks', date: date),
+      );
+      return;
+    }
+
     if (_taskController.text.trim().isNotEmpty) {
-      Provider.of<AppDataProvider>(context, listen: false)
-          .updateDailyTask(date, taskId, _taskController.text.trim());
+      provider.updateDailyTask(date, taskId, _taskController.text.trim());
       _taskController.clear();
       Navigator.pop(context);
     }
   }
 
   void _confirmDeleteHabit(String habit) {
+    final provider = context.read<AppDataProvider>();
+    final selectedDateString = _formatDate(_selectedDate);
+    if (!provider.canEditHabitsForDate(selectedDateString)) {
+      _showRestrictionMessage(
+        provider.getRestrictionMessage(domain: 'habits', date: selectedDateString),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (context) {
@@ -626,6 +734,10 @@ class _HabitsScreenState extends State<HabitsScreen> {
           _maybeEnsureDailyMotivation(provider, aiCoachProvider);
 
           final selectedDateString = _formatDate(_selectedDate);
+            final canEditHabits = provider.canEditHabitsForDate(selectedDateString);
+            final canEditTasks = provider.canEditTasksForDate(selectedDateString);
+            final canToggleVacation =
+              provider.canToggleVacationForDate(selectedDateString);
           final activeHabitNames = provider.getActiveHabitsForDate(selectedDateString);
           final dailyTasks = provider.getDailyTasks(selectedDateString);
           final disciplineScore = gamificationProvider.currentDisciplineScore.value;
@@ -707,9 +819,18 @@ class _HabitsScreenState extends State<HabitsScreen> {
                     margin: const EdgeInsets.symmetric(horizontal: 16),
                     color: isHoliday ? Colors.orange[50] : null,
                     child: InkWell(
-                      onTap: () {
-                        provider.toggleHoliday(selectedDateString);
-                      },
+                      onTap: canToggleVacation
+                          ? () {
+                              provider.toggleHoliday(selectedDateString);
+                            }
+                          : () {
+                              _showRestrictionMessage(
+                                provider.getRestrictionMessage(
+                                  domain: 'vacation',
+                                  date: selectedDateString,
+                                ),
+                              );
+                            },
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 16),
                         child: Column(
@@ -734,9 +855,13 @@ class _HabitsScreenState extends State<HabitsScreen> {
                                 ),
                                 Switch(
                                   value: isHoliday,
-                                  onChanged: (_) {
-                                    provider.toggleHoliday(selectedDateString);
-                                  },
+                                  onChanged: canToggleVacation
+                                      ? (_) {
+                                          provider.toggleHoliday(
+                                            selectedDateString,
+                                          );
+                                        }
+                                      : null,
                                   activeColor: Colors.orange,
                                 ),
                               ],
@@ -746,6 +871,21 @@ class _HabitsScreenState extends State<HabitsScreen> {
                                 padding: const EdgeInsets.only(top: 4, left: 36),
                                 child: Text(
                                   'This day will not be included in statistics',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.orange[700],
+                                    fontStyle: FontStyle.italic,
+                                  ),
+                                ),
+                              ),
+                            if (!canToggleVacation)
+                              Padding(
+                                padding: const EdgeInsets.only(top: 4, left: 36),
+                                child: Text(
+                                  provider.getRestrictionMessage(
+                                    domain: 'vacation',
+                                    date: selectedDateString,
+                                  ),
                                   style: TextStyle(
                                     fontSize: 12,
                                     color: Colors.orange[700],
@@ -780,12 +920,35 @@ class _HabitsScreenState extends State<HabitsScreen> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.add_circle, color: Color(0xFF2196F3)),
-                          onPressed: _showAddHabitDialog,
+                          onPressed: canEditHabits
+                              ? _showAddHabitDialog
+                              : () {
+                                  _showRestrictionMessage(
+                                    provider.getRestrictionMessage(
+                                      domain: 'habits',
+                                      date: selectedDateString,
+                                    ),
+                                  );
+                                },
                           tooltip: 'Add Habit',
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (!canEditHabits)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          provider.getRestrictionMessage(
+                            domain: 'habits',
+                            date: selectedDateString,
+                          ),
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
 
                     if (activeHabitNames.isEmpty)
                       Card(
@@ -808,9 +971,14 @@ class _HabitsScreenState extends State<HabitsScreen> {
                           child: ListTile(
                             leading: Checkbox(
                               value: isCompleted,
-                              onChanged: (_) {
-                                provider.toggleHabit(habit, selectedDateString);
-                              },
+                              onChanged: canEditHabits
+                                  ? (_) {
+                                      provider.toggleHabit(
+                                        habit,
+                                        selectedDateString,
+                                      );
+                                    }
+                                  : null,
                               activeColor: const Color(0xFF4CAF50),
                             ),
                             title: Text(
@@ -836,11 +1004,15 @@ class _HabitsScreenState extends State<HabitsScreen> {
                               children: [
                                 IconButton(
                                   icon: const Icon(Icons.edit, color: Color(0xFF2196F3)),
-                                  onPressed: () => _showEditHabitDialog(habit),
+                                  onPressed: canEditHabits
+                                      ? () => _showEditHabitDialog(habit)
+                                      : null,
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.delete, color: Colors.red),
-                                  onPressed: () => _confirmDeleteHabit(habit),
+                                  onPressed: canEditHabits
+                                      ? () => _confirmDeleteHabit(habit)
+                                      : null,
                                 ),
                               ],
                             ),
@@ -863,12 +1035,35 @@ class _HabitsScreenState extends State<HabitsScreen> {
                         ),
                         IconButton(
                           icon: const Icon(Icons.add_circle, color: Color(0xFF9C27B0)),
-                          onPressed: _showAddTaskDialog,
+                          onPressed: canEditTasks
+                              ? _showAddTaskDialog
+                              : () {
+                                  _showRestrictionMessage(
+                                    provider.getRestrictionMessage(
+                                      domain: 'tasks',
+                                      date: selectedDateString,
+                                    ),
+                                  );
+                                },
                           tooltip: 'Add Task',
                         ),
                       ],
                     ),
                     const SizedBox(height: 8),
+                    if (!canEditTasks)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Text(
+                          provider.getRestrictionMessage(
+                            domain: 'tasks',
+                            date: selectedDateString,
+                          ),
+                          style: TextStyle(
+                            color: Colors.grey[700],
+                            fontSize: 12,
+                          ),
+                        ),
+                      ),
 
                     if (dailyTasks.isEmpty)
                       Card(
@@ -893,9 +1088,14 @@ class _HabitsScreenState extends State<HabitsScreen> {
                           child: ListTile(
                             leading: Checkbox(
                               value: isCompleted,
-                              onChanged: (_) {
-                                provider.toggleDailyTask(selectedDateString, taskId);
-                              },
+                              onChanged: canEditTasks
+                                  ? (_) {
+                                      provider.toggleDailyTask(
+                                        selectedDateString,
+                                        taskId,
+                                      );
+                                    }
+                                  : null,
                               activeColor: const Color(0xFF9C27B0),
                             ),
                             title: Text(
@@ -912,13 +1112,24 @@ class _HabitsScreenState extends State<HabitsScreen> {
                               children: [
                                 IconButton(
                                   icon: const Icon(Icons.edit, color: Color(0xFF9C27B0)),
-                                  onPressed: () => _showEditTaskDialog(selectedDateString, taskId, taskName),
+                                  onPressed: canEditTasks
+                                      ? () => _showEditTaskDialog(
+                                            selectedDateString,
+                                            taskId,
+                                            taskName,
+                                          )
+                                      : null,
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.delete, color: Colors.red),
-                                  onPressed: () {
-                                    provider.removeDailyTask(selectedDateString, taskId);
-                                  },
+                                  onPressed: canEditTasks
+                                      ? () {
+                                          provider.removeDailyTask(
+                                            selectedDateString,
+                                            taskId,
+                                          );
+                                        }
+                                      : null,
                                 ),
                               ],
                             ),

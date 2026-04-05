@@ -1,9 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GeminiService {
   static const String _apiKeyKey = 'gemini_api_key';
+  static const String _apiKeyFallbackKey = 'gemini_api_key_fallback';
+
   final _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
@@ -17,11 +24,51 @@ class GeminiService {
   );
   
   Future<void> saveApiKey(String apiKey) async {
-    await _storage.write(key: _apiKeyKey, value: apiKey);
+    final normalized = apiKey.trim();
+    if (normalized.isEmpty) {
+      throw Exception('API key cannot be empty');
+    }
+
+    Object? secureStorageError;
+    try {
+      await _storage.write(key: _apiKeyKey, value: normalized);
+    } catch (e) {
+      secureStorageError = e;
+      debugPrint('Secure storage write failed, using fallback: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedInFallback = await prefs.setString(_apiKeyFallbackKey, normalized);
+
+    if (secureStorageError != null && !savedInFallback) {
+      throw Exception('Could not save API key on this device.');
+    }
   }
 
   Future<String?> getApiKey() async {
-    return await _storage.read(key: _apiKeyKey);
+    try {
+      final secureValue = await _storage.read(key: _apiKeyKey);
+      if (secureValue != null && secureValue.trim().isNotEmpty) {
+        return secureValue.trim();
+      }
+    } catch (e) {
+      debugPrint('Secure storage read failed, trying fallback: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final fallback = prefs.getString(_apiKeyFallbackKey)?.trim();
+    if (fallback == null || fallback.isEmpty) {
+      return null;
+    }
+
+    // Self-heal secure storage whenever possible.
+    try {
+      await _storage.write(key: _apiKeyKey, value: fallback);
+    } catch (_) {
+      // Best effort only.
+    }
+
+    return fallback;
   }
 
   Future<String> getDailyInsight(
@@ -417,15 +464,78 @@ Output requirements:
           )
           .timeout(const Duration(seconds: 30));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final text = data['candidates'][0]['content']['parts'][0]['text'];
-        return text ?? 'No response from AI';
-      } else {
-        throw Exception('API error: ${response.statusCode} - ${response.body}');
+      if (response.statusCode != 200) {
+        final details = _extractApiErrorMessage(response.body);
+        throw Exception(_friendlyStatusError(response.statusCode, details));
       }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final candidates = data['candidates'] as List<dynamic>?;
+      if (candidates == null || candidates.isEmpty) {
+        throw Exception('AI returned an empty response.');
+      }
+
+      final content = candidates.first as Map<String, dynamic>;
+      final generated = (((content['content'] as Map<String, dynamic>?)?['parts']
+                  as List<dynamic>?)
+              ?.firstOrNull as Map<String, dynamic>?)?['text']
+          as String?;
+
+      if (generated == null || generated.trim().isEmpty) {
+        throw Exception('AI returned an empty response.');
+      }
+
+      return generated.trim();
+    } on TimeoutException {
+      throw Exception(
+        'Request timed out. Check your internet connection and try again.',
+      );
+    } on SocketException {
+      throw Exception(
+        'No internet connection. Please check Wi-Fi or mobile data.',
+      );
+    } on http.ClientException catch (e) {
+      throw Exception('Network error: ${e.message}');
     } catch (e) {
       throw Exception('Failed to get AI response: $e');
+    }
+  }
+
+  String _extractApiErrorMessage(String body) {
+    try {
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final apiError = decoded['error'] as Map<String, dynamic>?;
+      final message = apiError?['message'] as String?;
+      if (message != null && message.trim().isNotEmpty) {
+        return message.trim();
+      }
+    } catch (_) {
+      // Fall through to raw body fallback.
+    }
+
+    final compact = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= 180) {
+      return compact;
+    }
+    return '${compact.substring(0, 180)}...';
+  }
+
+  String _friendlyStatusError(int statusCode, String details) {
+    switch (statusCode) {
+      case 400:
+        return 'Gemini rejected the request. Verify API key and request format. Details: $details';
+      case 401:
+      case 403:
+        return 'API key was rejected (invalid, restricted, or missing API access). Details: $details';
+      case 404:
+        return 'Gemini model endpoint not found. Details: $details';
+      case 429:
+        return 'Gemini quota limit reached. Please try again later. Details: $details';
+      default:
+        if (statusCode >= 500) {
+          return 'Gemini service is temporarily unavailable. Please try again soon.';
+        }
+        return 'Gemini API error ($statusCode). Details: $details';
     }
   }
 }
