@@ -568,7 +568,7 @@ class _HabitsScreenState extends State<HabitsScreen> {
     await aiCoachProvider.markDailyMotivationSeen();
 
     if (!mounted) return;
-    context.read<HomeNavigationProvider>().requestTab(2);
+    context.read<HomeNavigationProvider>().requestTab(3);
   }
 
   Future<void> _dismissMotivationCard(AICoachProvider aiCoachProvider) async {

@@ -20,6 +20,15 @@ class GamificationProvider extends ChangeNotifier {
   static const int _weeklyDecayCap = 50;
   static const int _streakBreakPenalty = 25;
   static const int _recoveryBonusXp = 50;
+  static const String _privilegedModeConfigMetaKey = 'privilegedModeConfig';
+  static const int _privilegedModeBusinessDayStartHour = 6;
+  static const int _privilegedModeDefaultDailyTargetTasks = 5;
+  static const int _privilegedModeDefaultWeeklyTargetTasks = 25;
+  static const List<String> _privilegedModeDefaultAllowedActivities = [
+    'Play games',
+    'Watch a movie',
+    'Hang out with friends',
+  ];
 
   static const List<Map<String, dynamic>> _dailyChallengeTemplates = [
     {
@@ -157,6 +166,140 @@ class GamificationProvider extends ChangeNotifier {
 
   List<Achievement> get achievements =>
       _hydrateAchievements(_appDataProvider?.data.achievements ?? const []);
+
+  Map<String, dynamic> getPrivilegedModeConfig() {
+    final provider = _appDataProvider;
+    if (provider == null || provider.isLoading) {
+      return _defaultPrivilegedModeConfig();
+    }
+
+    return _sanitizePrivilegedModeConfig(
+      provider.data.gamificationMeta[_privilegedModeConfigMetaKey],
+    );
+  }
+
+  Map<String, dynamic> getPrivilegedModeStatus() {
+    final provider = _appDataProvider;
+    final config = getPrivilegedModeConfig();
+
+    final dailyTargetHabits =
+        (config['dailyTargetTasks'] as num?)?.toInt() ??
+        _privilegedModeDefaultDailyTargetTasks;
+    final weeklyTargetHabits =
+        (config['weeklyTargetTasks'] as num?)?.toInt() ??
+        _privilegedModeDefaultWeeklyTargetTasks;
+    final allowedActivities =
+        _sanitizeAllowedActivities(config['allowedActivities']);
+
+    final now = DateTime.now();
+    final normalizedToday = _dateOnly(now);
+    final fallbackWindowStart = normalizedToday.subtract(const Duration(days: 6));
+
+    if (provider == null || provider.isLoading) {
+      return {
+        'isOn': false,
+        'isDailyOnTrack': false,
+        'isWeeklyOnTrack': false,
+        'isRollingSevenOnTrack': false,
+        'dailyCompletedHabits': 0,
+        'rollingSevenCompletedHabits': 0,
+        'dailyRequiredHabitsByNow': 0,
+        'rollingSevenRequiredHabits': weeklyTargetHabits,
+        'dailyTargetHabits': dailyTargetHabits,
+        'rollingSevenTargetHabits': weeklyTargetHabits,
+        'dailyCompletedTasks': 0,
+        'weeklyCompletedTasks': 0,
+        'dailyRequiredByNow': 0,
+        'weeklyRequiredByNow': weeklyTargetHabits,
+        'dailyTargetTasks': dailyTargetHabits,
+        'weeklyTargetTasks': weeklyTargetHabits,
+        'dayProgressFraction': 0.0,
+        'weekProgressFraction': 1.0,
+        'dayProgressPercent': 0,
+        'weekProgressPercent': 100,
+        'todayDateKey': _formatDate(normalizedToday),
+        'rollingWindowStartDateKey': _formatDate(fallbackWindowStart),
+        'weekStartDateKey': _formatDate(fallbackWindowStart),
+        'allowedActivities': allowedActivities,
+        'dataReady': false,
+      };
+    }
+
+    final businessToday = provider.getBusinessTodayDate();
+    final rollingWindowStartDate =
+        businessToday.subtract(const Duration(days: 6));
+    final todayDateKey = _formatDate(businessToday);
+    final rollingWindowStartDateKey = _formatDate(rollingWindowStartDate);
+
+    final dailyCompletedHabits = _completedHabitsForDate(todayDateKey);
+    final rollingSevenCompletedHabits =
+        _completedHabitsInRange(rollingWindowStartDate, businessToday);
+
+    final dayProgressFraction =
+        _businessDayProgressFraction(now, businessToday);
+    final dailyRequiredHabitsByNow =
+        _requiredByNow(dailyTargetHabits, dayProgressFraction);
+    final rollingSevenRequiredHabits = weeklyTargetHabits;
+
+    final isDailyOnTrack = dailyCompletedHabits >= dailyRequiredHabitsByNow;
+    final isWeeklyOnTrack =
+        rollingSevenCompletedHabits >= rollingSevenRequiredHabits;
+    final isOn = isDailyOnTrack && isWeeklyOnTrack;
+
+    return {
+      'isOn': isOn,
+      'isDailyOnTrack': isDailyOnTrack,
+      'isWeeklyOnTrack': isWeeklyOnTrack,
+      'isRollingSevenOnTrack': isWeeklyOnTrack,
+      'dailyCompletedHabits': dailyCompletedHabits,
+      'rollingSevenCompletedHabits': rollingSevenCompletedHabits,
+      'dailyRequiredHabitsByNow': dailyRequiredHabitsByNow,
+      'rollingSevenRequiredHabits': rollingSevenRequiredHabits,
+      'dailyTargetHabits': dailyTargetHabits,
+      'rollingSevenTargetHabits': weeklyTargetHabits,
+      'dailyCompletedTasks': dailyCompletedHabits,
+      'weeklyCompletedTasks': rollingSevenCompletedHabits,
+      'dailyRequiredByNow': dailyRequiredHabitsByNow,
+      'weeklyRequiredByNow': rollingSevenRequiredHabits,
+      'dailyTargetTasks': dailyTargetHabits,
+      'weeklyTargetTasks': weeklyTargetHabits,
+      'dayProgressFraction': dayProgressFraction,
+      'weekProgressFraction': 1.0,
+      'dayProgressPercent': (dayProgressFraction * 100).round(),
+      'weekProgressPercent': 100,
+      'todayDateKey': todayDateKey,
+      'rollingWindowStartDateKey': rollingWindowStartDateKey,
+      'weekStartDateKey': rollingWindowStartDateKey,
+      'allowedActivities': allowedActivities,
+      'dataReady': true,
+    };
+  }
+
+  Future<void> updatePrivilegedModeConfig({
+    int? dailyTargetTasks,
+    int? weeklyTargetTasks,
+    List<String>? allowedActivities,
+  }) async {
+    final provider = _appDataProvider;
+    if (provider == null || provider.isLoading) return;
+
+    final currentConfig = getPrivilegedModeConfig();
+    final mergedConfig = {
+      'dailyTargetTasks':
+          dailyTargetTasks ?? currentConfig['dailyTargetTasks'],
+      'weeklyTargetTasks':
+          weeklyTargetTasks ?? currentConfig['weeklyTargetTasks'],
+      'allowedActivities':
+          allowedActivities ?? currentConfig['allowedActivities'],
+    };
+
+    final sanitizedConfig = _sanitizePrivilegedModeConfig(mergedConfig);
+    final updatedMeta = Map<String, dynamic>.from(provider.data.gamificationMeta)
+      ..[_privilegedModeConfigMetaKey] = sanitizedConfig;
+
+    await provider.updateGamificationData(gamificationMeta: updatedMeta);
+    notifyListeners();
+  }
 
   Map<String, dynamic> getDailyChallengeData() {
     final provider = _appDataProvider;
@@ -379,6 +522,17 @@ class GamificationProvider extends ChangeNotifier {
     }
     if (!updatedMeta.containsKey('currentStreakSnapshot')) {
       updatedMeta['currentStreakSnapshot'] = stats.currentStreak;
+      updateNeeded = true;
+    }
+
+    final sanitizedPrivilegedModeConfig =
+        _sanitizePrivilegedModeConfig(updatedMeta[_privilegedModeConfigMetaKey]);
+    if (!_deepCollectionEquals(
+      updatedMeta[_privilegedModeConfigMetaKey],
+      sanitizedPrivilegedModeConfig,
+    )) {
+      updatedMeta[_privilegedModeConfigMetaKey] =
+          sanitizedPrivilegedModeConfig;
       updateNeeded = true;
     }
 
@@ -994,6 +1148,143 @@ class GamificationProvider extends ChangeNotifier {
       output[entry.key.toString()] = (entry.value as num?)?.toInt() ?? 0;
     }
     return output;
+  }
+
+  Map<String, dynamic> _defaultPrivilegedModeConfig() {
+    return {
+      'dailyTargetTasks': _privilegedModeDefaultDailyTargetTasks,
+      'weeklyTargetTasks': _privilegedModeDefaultWeeklyTargetTasks,
+      'allowedActivities':
+          List<String>.from(_privilegedModeDefaultAllowedActivities),
+    };
+  }
+
+  Map<String, dynamic> _sanitizePrivilegedModeConfig(dynamic raw) {
+    final source = <String, dynamic>{};
+    if (raw is Map) {
+      for (final entry in raw.entries) {
+        source[entry.key.toString()] = entry.value;
+      }
+    }
+
+    final dailyTargetTasks = _sanitizePositiveTarget(
+      source['dailyTargetTasks'],
+      fallback: _privilegedModeDefaultDailyTargetTasks,
+    );
+    int weeklyTargetTasks = _sanitizePositiveTarget(
+      source['weeklyTargetTasks'],
+      fallback: _privilegedModeDefaultWeeklyTargetTasks,
+    );
+    if (weeklyTargetTasks < dailyTargetTasks) {
+      weeklyTargetTasks = dailyTargetTasks;
+    }
+    final allowedActivities = _sanitizeAllowedActivities(source['allowedActivities']);
+
+    return {
+      'dailyTargetTasks': dailyTargetTasks,
+      'weeklyTargetTasks': weeklyTargetTasks,
+      'allowedActivities': allowedActivities,
+    };
+  }
+
+  int _sanitizePositiveTarget(dynamic value, {required int fallback}) {
+    final parsed = (value as num?)?.toInt();
+    if (parsed == null || parsed <= 0) return fallback;
+    return parsed;
+  }
+
+  List<String> _sanitizeAllowedActivities(dynamic raw) {
+    if (raw is! List) {
+      return List<String>.from(_privilegedModeDefaultAllowedActivities);
+    }
+
+    final normalized = <String>[];
+    for (final item in raw) {
+      final value = item.toString().trim();
+      if (value.isEmpty || normalized.contains(value)) {
+        continue;
+      }
+      normalized.add(value);
+    }
+
+    if (normalized.isEmpty) {
+      return List<String>.from(_privilegedModeDefaultAllowedActivities);
+    }
+
+    return normalized;
+  }
+
+  int _completedHabitsForDate(String dateKey) {
+    final provider = _appDataProvider;
+    if (provider == null || provider.isLoading) return 0;
+
+    final activeHabits = provider.getActiveHabitsForDate(dateKey);
+    return activeHabits
+        .where((habitName) => provider.isHabitCompleted(habitName, dateKey))
+        .length;
+  }
+
+  int _completedHabitsInRange(DateTime startDate, DateTime endDate) {
+    int total = 0;
+    var cursor = _dateOnly(startDate);
+    final normalizedEnd = _dateOnly(endDate);
+
+    while (!cursor.isAfter(normalizedEnd)) {
+      total += _completedHabitsForDate(_formatDate(cursor));
+      cursor = cursor.add(const Duration(days: 1));
+    }
+
+    return total;
+  }
+
+  double _businessDayProgressFraction(DateTime now, DateTime businessToday) {
+    final dayStart = DateTime(
+      businessToday.year,
+      businessToday.month,
+      businessToday.day,
+      _privilegedModeBusinessDayStartHour,
+    );
+    final elapsedMs = now.difference(dayStart).inMilliseconds;
+    return _clamp01(elapsedMs / const Duration(hours: 24).inMilliseconds);
+  }
+
+  int _requiredByNow(int target, double progressFraction) {
+    if (target <= 0) return 0;
+    return (target * _clamp01(progressFraction)).ceil();
+  }
+
+  bool _deepCollectionEquals(dynamic left, dynamic right) {
+    if (identical(left, right)) return true;
+
+    if (left is Map && right is Map) {
+      if (left.length != right.length) return false;
+
+      for (final entry in left.entries) {
+        final leftKey = entry.key;
+        final leftKeyString = leftKey.toString();
+        final hasKey = right.containsKey(leftKey) || right.containsKey(leftKeyString);
+        if (!hasKey) return false;
+
+        final rightValue =
+            right.containsKey(leftKey) ? right[leftKey] : right[leftKeyString];
+        if (!_deepCollectionEquals(entry.value, rightValue)) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    if (left is List && right is List) {
+      if (left.length != right.length) return false;
+      for (int index = 0; index < left.length; index++) {
+        if (!_deepCollectionEquals(left[index], right[index])) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    return left == right;
   }
 
   DateTime _dateOnly(DateTime date) {

@@ -76,6 +76,10 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
 
               final dailyChallenge = gamificationProvider.getDailyChallengeData();
               final weeklyChallenge = gamificationProvider.getWeeklyChallengeData();
+                final privilegedModeConfig =
+                  gamificationProvider.getPrivilegedModeConfig();
+                final privilegedModeStatus =
+                  gamificationProvider.getPrivilegedModeStatus();
 
               return SingleChildScrollView(
                 padding: const EdgeInsets.all(16),
@@ -100,6 +104,11 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
                       ),
                     ),
                     const SizedBox(height: 24),
+                    _buildPrivilegedModeCard(
+                      status: privilegedModeStatus,
+                      config: privilegedModeConfig,
+                    ),
+                    const SizedBox(height: 16),
                     _buildChallengeCard(
                       challengeData: dailyChallenge,
                       isClaiming: _isClaimingDaily,
@@ -348,6 +357,453 @@ class _ChallengeScreenState extends State<ChallengeScreen> {
         ),
       ),
     );
+  }
+
+  Widget _buildPrivilegedModeCard({
+    required Map<String, dynamic> status,
+    required Map<String, dynamic> config,
+  }) {
+    final isOn = status['isOn'] == true;
+    final isDailyOnTrack = status['isDailyOnTrack'] == true;
+    final isRollingSevenOnTrack =
+      status['isRollingSevenOnTrack'] == true ||
+      status['isWeeklyOnTrack'] == true;
+    final dailyCompletedHabits =
+      (status['dailyCompletedHabits'] as num?)?.toInt() ??
+        (status['dailyCompletedTasks'] as num?)?.toInt() ??
+        0;
+    final rollingSevenCompletedHabits =
+      (status['rollingSevenCompletedHabits'] as num?)?.toInt() ??
+        (status['weeklyCompletedTasks'] as num?)?.toInt() ??
+        0;
+    final dailyRequiredHabitsByNow =
+      (status['dailyRequiredHabitsByNow'] as num?)?.toInt() ??
+        (status['dailyRequiredByNow'] as num?)?.toInt() ??
+        0;
+    final rollingSevenRequiredHabits =
+      (status['rollingSevenRequiredHabits'] as num?)?.toInt() ??
+        (status['weeklyRequiredByNow'] as num?)?.toInt() ??
+        0;
+    final dailyTargetHabits =
+      (status['dailyTargetHabits'] as num?)?.toInt() ??
+        (status['dailyTargetTasks'] as num?)?.toInt() ??
+        0;
+    final rollingSevenTargetHabits =
+      (status['rollingSevenTargetHabits'] as num?)?.toInt() ??
+        (status['weeklyTargetTasks'] as num?)?.toInt() ??
+        0;
+    final dayProgressPercent =
+        (status['dayProgressPercent'] as num?)?.toDouble() ?? 0;
+    final rollingWindowStartDateKey =
+      status['rollingWindowStartDateKey'] as String? ??
+        status['weekStartDateKey'] as String? ??
+        '';
+    final todayDateKey = status['todayDateKey'] as String? ?? '';
+    final dataReady = status['dataReady'] != false;
+    final allowedActivities = (status['allowedActivities'] as List?)
+            ?.map((item) => item.toString().trim())
+            .where((item) => item.isNotEmpty)
+            .toList() ??
+        const <String>[];
+
+    final dailyTrackRatio = dailyRequiredHabitsByNow <= 0
+        ? 1.0
+      : (dailyCompletedHabits / dailyRequiredHabitsByNow)
+        .clamp(0.0, 1.0)
+        .toDouble();
+    final rollingSevenTrackRatio = rollingSevenRequiredHabits <= 0
+        ? 1.0
+      : (rollingSevenCompletedHabits / rollingSevenRequiredHabits)
+            .clamp(0.0, 1.0)
+            .toDouble();
+    final rollingWindowLabel =
+      rollingWindowStartDateKey.isNotEmpty && todayDateKey.isNotEmpty
+        ? '$rollingWindowStartDateKey to $todayDateKey'
+        : 'Rolling window: last 7 days';
+
+    final statusColor = isOn ? const Color(0xFF2E7D32) : const Color(0xFFC62828);
+    final statusLabel = !dataReady ? 'SYNCING' : (isOn ? 'ON' : 'OFF');
+    final gradientColors = isOn
+        ? const [
+            Color(0xFF1B5E20),
+            Color(0xFF2E7D32),
+            Color(0xFF26A69A),
+          ]
+        : const [
+            Color(0xFF8E1B1B),
+            Color(0xFFC62828),
+            Color(0xFFD84315),
+          ];
+    final cardShadowColor = isOn ? const Color(0xFF1B5E20) : const Color(0xFF8E1B1B);
+
+    return Card(
+      elevation: 0,
+      color: Colors.transparent,
+      clipBehavior: Clip.antiAlias,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      child: Container(
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: LinearGradient(
+            colors: gradientColors,
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          border: Border.all(color: Colors.white.withOpacity(0.16)),
+          boxShadow: [
+            BoxShadow(
+              color: cardShadowColor.withOpacity(0.38),
+              blurRadius: 14,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  const Icon(Icons.verified_user, color: Colors.white),
+                  const SizedBox(width: 8),
+                  const Expanded(
+                    child: Text(
+                      'Privileged Mode',
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.92),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      statusLabel,
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                        color: statusColor,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              const Text(
+                'Privileged mode is automatic. It turns ON only when both your current-day habit progress and your last 7 days completed habits are on track.',
+                style: TextStyle(
+                  fontSize: 13,
+                  color: Colors.white,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  const Text(
+                    'Mode control: Automatic',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                  const Spacer(),
+                  OutlinedButton.icon(
+                    onPressed: () => _openPrivilegedModeCustomizeDialog(config),
+                    icon: const Icon(Icons.tune),
+                    label: const Text('Customize'),
+                    style: OutlinedButton.styleFrom(
+                      backgroundColor: Colors.white.withOpacity(0.92),
+                      foregroundColor: statusColor,
+                      side: BorderSide(color: Colors.white.withOpacity(0.95)),
+                      textStyle: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                ],
+              ),
+              if (!dataReady)
+                const Padding(
+                  padding: EdgeInsets.only(top: 4),
+                  child: Text(
+                    'Syncing progress data... status will update shortly.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.white70,
+                    ),
+                  ),
+                ),
+              const SizedBox(height: 10),
+              _buildPrivilegedProgressSection(
+                title: 'Today',
+                currentValue: dailyCompletedHabits,
+                requiredByNow: dailyRequiredHabitsByNow,
+                target: dailyTargetHabits,
+                isOnTrack: isDailyOnTrack,
+                timelineLabel:
+                    'Day elapsed: ${dayProgressPercent.toStringAsFixed(0)}%',
+                ratio: dailyTrackRatio,
+              ),
+              const SizedBox(height: 12),
+              _buildPrivilegedProgressSection(
+                title: 'Last 7 days',
+                currentValue: rollingSevenCompletedHabits,
+                requiredByNow: rollingSevenRequiredHabits,
+                target: rollingSevenTargetHabits,
+                isOnTrack: isRollingSevenOnTrack,
+                timelineLabel: rollingWindowLabel,
+                ratio: rollingSevenTrackRatio,
+              ),
+              const SizedBox(height: 12),
+              const Text(
+                'Allowed when ON',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(height: 8),
+              if (allowedActivities.isEmpty)
+                const Text(
+                  'No allowed activities configured.',
+                  style: TextStyle(color: Colors.white70),
+                )
+              else
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: allowedActivities
+                      .map(
+                        (activity) => Chip(
+                          label: Text(
+                            activity,
+                            style: TextStyle(
+                              color: statusColor,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          backgroundColor: Colors.white.withOpacity(0.9),
+                        ),
+                      )
+                      .toList(),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildPrivilegedProgressSection({
+    required String title,
+    required int currentValue,
+    required int requiredByNow,
+    required int target,
+    required bool isOnTrack,
+    required String timelineLabel,
+    required double ratio,
+  }) {
+    final progressLabel = isOnTrack ? 'On track' : 'Behind';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Text(
+              '$title habit progress',
+              style: const TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.w700,
+                color: Colors.white,
+              ),
+            ),
+            const Spacer(),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(isOnTrack ? 0.22 : 0.16),
+                borderRadius: BorderRadius.circular(999),
+                border: Border.all(color: Colors.white.withOpacity(0.24)),
+              ),
+              child: Text(
+                progressLabel,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 12,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        LinearProgressIndicator(
+          value: ratio,
+          minHeight: 8,
+          borderRadius: BorderRadius.circular(8),
+          color: const Color(0xFFFFF176),
+          backgroundColor: Colors.white.withOpacity(0.28),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          '$currentValue done now • need $requiredByNow by now • target $target',
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.white,
+          ),
+        ),
+        const SizedBox(height: 2),
+        Text(
+          timelineLabel,
+          style: const TextStyle(
+            fontSize: 12,
+            color: Colors.white70,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openPrivilegedModeCustomizeDialog(
+    Map<String, dynamic> currentConfig,
+  ) async {
+    final dailyTargetController = TextEditingController(
+      text: ((currentConfig['dailyTargetTasks'] as num?)?.toInt() ?? 5)
+          .toString(),
+    );
+    final weeklyTargetController = TextEditingController(
+      text: ((currentConfig['weeklyTargetTasks'] as num?)?.toInt() ?? 25)
+          .toString(),
+    );
+    final allowedActivitiesController = TextEditingController(
+      text: (currentConfig['allowedActivities'] as List?)
+              ?.map((item) => item.toString().trim())
+              .where((item) => item.isNotEmpty)
+              .join('\n') ??
+          '',
+    );
+
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Customize Privileged Mode'),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: dailyTargetController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Daily target habits',
+                    hintText: 'e.g. 5',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: weeklyTargetController,
+                  keyboardType: TextInputType.number,
+                  decoration: const InputDecoration(
+                    labelText: 'Last 7 days target habits',
+                    hintText: 'e.g. 25',
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: allowedActivitiesController,
+                  maxLines: 6,
+                  decoration: const InputDecoration(
+                    labelText: 'Allowed activities',
+                    hintText: 'One activity per line',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'Last 7 days target will be adjusted to at least the daily target.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () async {
+                final dailyTargetTasks =
+                    int.tryParse(dailyTargetController.text.trim());
+                final weeklyTargetTasks =
+                    int.tryParse(weeklyTargetController.text.trim());
+                final allowedActivities = allowedActivitiesController.text
+                    .split('\n')
+                    .map((item) => item.trim())
+                    .where((item) => item.isNotEmpty)
+                    .toList();
+
+                if (dailyTargetTasks == null ||
+                    weeklyTargetTasks == null ||
+                    dailyTargetTasks <= 0 ||
+                    weeklyTargetTasks <= 0) {
+                  _showMessage(
+                    'Please enter valid positive numbers for daily and last-7-days habit targets.',
+                    isSuccess: false,
+                  );
+                  return;
+                }
+
+                if (allowedActivities.isEmpty) {
+                  _showMessage(
+                    'Please enter at least one allowed activity.',
+                    isSuccess: false,
+                  );
+                  return;
+                }
+
+                try {
+                  await context
+                      .read<GamificationProvider>()
+                      .updatePrivilegedModeConfig(
+                        dailyTargetTasks: dailyTargetTasks,
+                        weeklyTargetTasks: weeklyTargetTasks,
+                        allowedActivities: allowedActivities,
+                      );
+                  if (!mounted) return;
+                  Navigator.of(dialogContext).pop();
+                  _showMessage(
+                    'Privileged mode settings saved.',
+                    isSuccess: true,
+                  );
+                } catch (e) {
+                  if (!mounted) return;
+                  _showMessage(
+                    'Could not save privileged mode settings: $e',
+                    isSuccess: false,
+                  );
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+
+    dailyTargetController.dispose();
+    weeklyTargetController.dispose();
+    allowedActivitiesController.dispose();
   }
 
   Future<void> _claimDailyReward() async {
