@@ -41,6 +41,17 @@ dependencies:
   googleapis: ^13.2.0
   extension_google_sign_in_as_googleapis_auth: ^2.0.12
 
+  # Gamification UI and utilities
+  fl_chart: ^0.68.0
+  confetti: ^0.8.0
+  flutter_svg: ^2.0.17
+  screenshot: ^3.0.0
+  image: ^4.5.4
+  share_plus: ^10.0.2
+  lottie: ^3.2.0
+  uuid: ^4.5.1
+  speech_to_text: ^7.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -48,3 +59,5 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/badges/

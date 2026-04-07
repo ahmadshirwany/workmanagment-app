@@ -1,9 +1,16 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class GeminiService {
   static const String _apiKeyKey = 'gemini_api_key';
+  static const String _apiKeyFallbackKey = 'gemini_api_key_fallback';
+
   final _storage = const FlutterSecureStorage(
     aOptions: AndroidOptions(
       encryptedSharedPreferences: true,
@@ -17,11 +24,51 @@ class GeminiService {
   );
   
   Future<void> saveApiKey(String apiKey) async {
-    await _storage.write(key: _apiKeyKey, value: apiKey);
+    final normalized = apiKey.trim();
+    if (normalized.isEmpty) {
+      throw Exception('API key cannot be empty');
+    }
+
+    Object? secureStorageError;
+    try {
+      await _storage.write(key: _apiKeyKey, value: normalized);
+    } catch (e) {
+      secureStorageError = e;
+      debugPrint('Secure storage write failed, using fallback: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final savedInFallback = await prefs.setString(_apiKeyFallbackKey, normalized);
+
+    if (secureStorageError != null && !savedInFallback) {
+      throw Exception('Could not save API key on this device.');
+    }
   }
 
   Future<String?> getApiKey() async {
-    return await _storage.read(key: _apiKeyKey);
+    try {
+      final secureValue = await _storage.read(key: _apiKeyKey);
+      if (secureValue != null && secureValue.trim().isNotEmpty) {
+        return secureValue.trim();
+      }
+    } catch (e) {
+      debugPrint('Secure storage read failed, trying fallback: $e');
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final fallback = prefs.getString(_apiKeyFallbackKey)?.trim();
+    if (fallback == null || fallback.isEmpty) {
+      return null;
+    }
+
+    // Self-heal secure storage whenever possible.
+    try {
+      await _storage.write(key: _apiKeyKey, value: fallback);
+    } catch (_) {
+      // Best effort only.
+    }
+
+    return fallback;
   }
 
   Future<String> getDailyInsight(
@@ -239,6 +286,162 @@ Make recommendations specific, measurable, and tied to their actual data. Use em
     return await _callGeminiApi(apiKey, prompt);
   }
 
+  Future<String> generatePersonalizedChallenge({
+    required List<String> habitNames,
+    required int currentStreak,
+    required double habitCompletionRate,
+    required double weeklyWorkHours,
+    required double taskCompletionRate,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final prompt = '''
+Create one personalized, realistic 30-day discipline challenge for this user.
+
+User snapshot:
+- Current streak: $currentStreak days
+- Habit completion rate: ${(habitCompletionRate * 100).toStringAsFixed(1)}%
+- Weekly focus hours (avg): ${weeklyWorkHours.toStringAsFixed(1)}
+- Daily task completion rate: ${(taskCompletionRate * 100).toStringAsFixed(1)}%
+- Current habits: ${habitNames.isEmpty ? 'No habits defined yet' : habitNames.join(', ')}
+
+Rules:
+- Keep challenge concise, specific, and measurable.
+- Make it hard but achievable in 30 days.
+- Include a clear daily or weekly target.
+- End with one short motivational line.
+
+Output format:
+Title: ...
+Challenge: ...
+How to track: ...
+Motivation: ...
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateContextualChatReply({
+    required String userMessage,
+    required Map<String, dynamic> context,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final prompt = '''
+You are an addictive but healthy AI productivity coach.
+Your style: personal, direct, warm, actionable, never generic.
+
+Live context:
+- Date: ${context['date']}
+- Current streak: ${context['streak']}
+- Longest streak: ${context['longestStreak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- 7-day maintenance days: ${context['maintenanceDays']}/7
+- Weekly task completion: ${context['weeklyTaskCompletionRate']}
+- Weekly work hours: ${context['weeklyWorkHours']}
+- Weakest habit: ${context['weakHabit']}
+- Active challenge: ${context['activeChallenge']}
+- Recent reflections: ${context['recentReflections']}
+- Last coach messages: ${context['lastChatMessages']}
+
+User message:
+$userMessage
+
+Instructions:
+1. Reply in 3-6 short lines.
+2. Reference at least one concrete data point from context.
+3. End with one immediate next step for today.
+4. Keep tone motivating and practical.
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateQuickActionResponse({
+    required String actionType,
+    required String actionPrompt,
+    required Map<String, dynamic> context,
+  }) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final roastSafety = actionType == 'roast_lazy_day'
+        ? 'For roast mode: keep it playful, funny, and kind. No insults, shame, or demotivating language.'
+        : 'Keep it sharp, positive, and data-aware.';
+
+    final prompt = '''
+You are an AI Coach in a discipline tracker app.
+Action type: $actionType
+Requested action: $actionPrompt
+
+User context:
+- Streak: ${context['streak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- Weak habit: ${context['weakHabit']}
+- Active challenge: ${context['activeChallenge']}
+- Recent reflections: ${context['recentReflections']}
+- Last messages: ${context['lastChatMessages']}
+
+Rules:
+- Use the context; do not be generic.
+- Keep response concise: 4-7 short lines.
+- Include one clear action item for today.
+- $roastSafety
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
+  Future<String> generateDailyMotivation(Map<String, dynamic> context) async {
+    final apiKey = await getApiKey();
+    if (apiKey == null || apiKey.isEmpty) {
+      throw Exception('API key not configured');
+    }
+
+    final reflections = (context['recentReflections'] as List<dynamic>? ?? const [])
+        .map((item) => item.toString())
+        .where((text) => text.trim().isNotEmpty)
+        .toList();
+
+    final prompt = '''
+Create a highly personalized daily motivation card message for this user.
+This should feel like a coach that deeply knows them.
+
+Context snapshot:
+- Date: ${context['date']}
+- Current streak: ${context['streak']}
+- Longest streak: ${context['longestStreak']}
+- Discipline score: ${context['disciplineScore']}
+- Today's XP: ${context['todayXp']}
+- Maintenance status (7 days): ${context['maintenanceDays']}/7
+- Weekly task completion: ${context['weeklyTaskCompletionRate']}
+- Weekly work hours: ${context['weeklyWorkHours']}
+- Active challenge: ${context['activeChallenge']}
+- Weak habit: ${context['weakHabit']}
+- Last 3 chat lines: ${context['lastChatMessages']}
+- Recent reflections: ${reflections.join(' | ')}
+
+Output requirements:
+1. 2-4 concise motivational lines.
+2. Must mention at least one real metric above.
+3. Include one concrete next step for today.
+4. Encouraging, actionable, never generic.
+5. If user has no strong history, use a warm onboarding tone.
+''';
+
+    return await _callGeminiApi(apiKey, prompt);
+  }
+
   Future<String> _callGeminiApi(String apiKey, String prompt) async {
     final url = Uri.parse(
       'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey',
@@ -261,15 +464,78 @@ Make recommendations specific, measurable, and tied to their actual data. Use em
           )
           .timeout(const Duration(seconds: 30));
 
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final text = data['candidates'][0]['content']['parts'][0]['text'];
-        return text ?? 'No response from AI';
-      } else {
-        throw Exception('API error: ${response.statusCode} - ${response.body}');
+      if (response.statusCode != 200) {
+        final details = _extractApiErrorMessage(response.body);
+        throw Exception(_friendlyStatusError(response.statusCode, details));
       }
+
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      final candidates = data['candidates'] as List<dynamic>?;
+      if (candidates == null || candidates.isEmpty) {
+        throw Exception('AI returned an empty response.');
+      }
+
+      final content = candidates.first as Map<String, dynamic>;
+      final generated = (((content['content'] as Map<String, dynamic>?)?['parts']
+                  as List<dynamic>?)
+              ?.firstOrNull as Map<String, dynamic>?)?['text']
+          as String?;
+
+      if (generated == null || generated.trim().isEmpty) {
+        throw Exception('AI returned an empty response.');
+      }
+
+      return generated.trim();
+    } on TimeoutException {
+      throw Exception(
+        'Request timed out. Check your internet connection and try again.',
+      );
+    } on SocketException {
+      throw Exception(
+        'No internet connection. Please check Wi-Fi or mobile data.',
+      );
+    } on http.ClientException catch (e) {
+      throw Exception('Network error: ${e.message}');
     } catch (e) {
       throw Exception('Failed to get AI response: $e');
+    }
+  }
+
+  String _extractApiErrorMessage(String body) {
+    try {
+      final decoded = jsonDecode(body) as Map<String, dynamic>;
+      final apiError = decoded['error'] as Map<String, dynamic>?;
+      final message = apiError?['message'] as String?;
+      if (message != null && message.trim().isNotEmpty) {
+        return message.trim();
+      }
+    } catch (_) {
+      // Fall through to raw body fallback.
+    }
+
+    final compact = body.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (compact.length <= 180) {
+      return compact;
+    }
+    return '${compact.substring(0, 180)}...';
+  }
+
+  String _friendlyStatusError(int statusCode, String details) {
+    switch (statusCode) {
+      case 400:
+        return 'Gemini rejected the request. Verify API key and request format. Details: $details';
+      case 401:
+      case 403:
+        return 'API key was rejected (invalid, restricted, or missing API access). Details: $details';
+      case 404:
+        return 'Gemini model endpoint not found. Details: $details';
+      case 429:
+        return 'Gemini quota limit reached. Please try again later. Details: $details';
+      default:
+        if (statusCode >= 500) {
+          return 'Gemini service is temporarily unavailable. Please try again soon.';
+        }
+        return 'Gemini API error ($statusCode). Details: $details';
     }
   }
 }

@@ -3,6 +3,7 @@
     
     <!-- Internet permission for AI features -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
     
     <!-- Storage permissions for data export/import -->
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>

@@ -1,4 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+
+import '../providers/home_navigation_provider.dart';
 import 'habits_screen.dart';
 import 'challenge_screen.dart';
 import 'reflection_screen.dart';
@@ -19,15 +22,16 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateMixin {
   late TabController _tabController;
+  HomeNavigationProvider? _homeNavigationProvider;
 
-  // Primary screens in new order: Daily Tasks, Stats, AI Coach, and rest
+  // Primary screens in new order: Daily Tasks, Stats, Challenge, AI Coach, and rest
   final List<Widget> _primaryScreens = [
     const HabitsScreen(),           // 0: Daily Tasks
     const StatisticsScreen(),       // 1: Stats
-    const AICoachScreen(),          // 2: AI Coach
-    const WorkTimeScreen(),         // 3: Work Time
-    const CalendarScreen(),         // 4: Calendar
-    const ChallengeScreen(),        // 5: Challenge
+    const ChallengeScreen(),        // 2: Challenge
+    const AICoachScreen(),          // 3: AI Coach
+    const WorkTimeScreen(),         // 4: Work Time
+    const CalendarScreen(),         // 5: Calendar
     const ReflectionScreen(),       // 6: Reflection
     const GoalsScreen(),            // 7: Goals
     const DataManagementScreen(),   // 8: Data
@@ -37,10 +41,10 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   final List<Tab> _primaryTabs = const [
     Tab(icon: Icon(Icons.check_circle), text: 'Daily Tasks'),
     Tab(icon: Icon(Icons.bar_chart), text: 'Stats'),
+    Tab(icon: Icon(Icons.emoji_events), text: 'Challenge'),
     Tab(icon: Icon(Icons.psychology), text: 'AI Coach'),
     Tab(icon: Icon(Icons.timer), text: 'Work Time'),
     Tab(icon: Icon(Icons.calendar_today), text: 'Calendar'),
-    Tab(icon: Icon(Icons.emoji_events), text: 'Challenge'),
     Tab(icon: Icon(Icons.edit_note), text: 'Reflection'),
     Tab(icon: Icon(Icons.flag), text: 'Goals'),
     Tab(icon: Icon(Icons.save), text: 'Data'),
@@ -54,7 +58,27 @@ class _HomeScreenState extends State<HomeScreen> with SingleTickerProviderStateM
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _homeNavigationProvider ??= context.read<HomeNavigationProvider>()
+      ..addListener(_handleRequestedTab);
+  }
+
+  void _handleRequestedTab() {
+    final request = _homeNavigationProvider?.requestedTab;
+    if (request == null) return;
+
+    final safeIndex = request.clamp(0, _primaryScreens.length - 1);
+    if (_tabController.index != safeIndex) {
+      _tabController.animateTo(safeIndex);
+    }
+
+    _homeNavigationProvider?.clearRequest();
+  }
+
+  @override
   void dispose() {
+    _homeNavigationProvider?.removeListener(_handleRequestedTab);
     _tabController.dispose();
     super.dispose();
   }

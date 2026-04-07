@@ -1,24 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'dart:async';
-import '../providers/app_data_provider.dart';
-import '../services/gemini_service.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-class ChatMessage {
-  final String id;
-  final String content;
-  final bool isUser;
-  final DateTime timestamp;
-  final String? type;
-
-  ChatMessage({
-    required this.id,
-    required this.content,
-    required this.isUser,
-    required this.timestamp,
-    this.type,
-  });
-}
+import '../models/ai_chat_message.dart';
+import '../providers/ai_coach_provider.dart';
+import 'ai_history_screen.dart';
 
 class AICoachScreen extends StatefulWidget {
   const AICoachScreen({super.key});
@@ -28,16 +14,15 @@ class AICoachScreen extends StatefulWidget {
 }
 
 class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveClientMixin {
-  final GeminiService _geminiService = GeminiService();
   final TextEditingController _apiKeyController = TextEditingController();
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-  
-  List<ChatMessage> _messages = [];
-  bool _isLoading = false;
-  bool _hasApiKey = false;
-  int _messageLifetimeMinutes = 30;
-  Timer? _cleanupTimer;
+  final stt.SpeechToText _speechToText = stt.SpeechToText();
+
+  bool _speechReady = false;
+  bool _isListening = false;
+  int _lastMessageCount = 0;
+  bool _lastLoadingState = false;
 
   @override
   bool get wantKeepAlive => true;
@@ -45,9 +30,10 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
   @override
   void initState() {
     super.initState();
-    _checkApiKey();
-    _startCleanupTimer();
-    _addWelcomeMessage();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _initializeSpeech();
+    });
   }
 
   @override
@@ -55,73 +41,32 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
     _apiKeyController.dispose();
     _inputController.dispose();
     _scrollController.dispose();
-    _cleanupTimer?.cancel();
+    _speechToText.stop();
     super.dispose();
   }
 
-  void _startCleanupTimer() {
-    _cleanupTimer = Timer.periodic(const Duration(minutes: 1), (_) {
-      _cleanupOldMessages();
-    });
-  }
+  Future<void> _initializeSpeech() async {
+    final available = await _speechToText.initialize(
+      onStatus: (status) {
+        if (!mounted) return;
+        if (status == 'done' || status == 'notListening') {
+          setState(() {
+            _isListening = false;
+          });
+        }
+      },
+      onError: (_) {
+        if (!mounted) return;
+        setState(() {
+          _isListening = false;
+        });
+      },
+    );
 
-  void _cleanupOldMessages() {
-    final cutoff = DateTime.now().subtract(Duration(minutes: _messageLifetimeMinutes));
-    final welcomeMsg = _messages.isNotEmpty ? _messages.first : null;
+    if (!mounted) return;
     setState(() {
-      _messages = _messages.where((msg) => 
-        msg.id == 'welcome' || msg.timestamp.isAfter(cutoff)
-      ).toList();
-      // Re-add welcome if it was removed
-      if (_messages.isEmpty && welcomeMsg != null) {
-        _messages.add(welcomeMsg);
-      }
+      _speechReady = available;
     });
-  }
-
-  void _addWelcomeMessage() {
-    _messages.add(ChatMessage(
-      id: 'welcome',
-      content: '👋 Hi! I\'m your AI Coach.\n\nAsk me anything about your goals, habits, or productivity. Use the quick actions above or type your question below!',
-      isUser: false,
-      timestamp: DateTime.now(),
-      type: 'system',
-    ));
-  }
-
-  Future<void> _checkApiKey() async {
-    final apiKey = await _geminiService.getApiKey();
-    setState(() {
-      _hasApiKey = apiKey != null && apiKey.isNotEmpty;
-    });
-  }
-
-  Future<void> _saveApiKey() async {
-    await _geminiService.saveApiKey(_apiKeyController.text);
-    _apiKeyController.clear();
-    await _checkApiKey();
-    
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('API key saved!'),
-          backgroundColor: Color(0xFF4CAF50),
-        ),
-      );
-    }
-  }
-
-  void _addMessage(String content, {bool isUser = false, String? type}) {
-    setState(() {
-      _messages.add(ChatMessage(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        content: content,
-        isUser: isUser,
-        timestamp: DateTime.now(),
-        type: type,
-      ));
-    });
-    _scrollToBottom();
   }
 
   void _scrollToBottom() {
@@ -136,89 +81,176 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
     });
   }
 
-  Future<void> _sendMessage() async {
+  Future<void> _sendMessage(AICoachProvider coach) async {
     final text = _inputController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || coach.isLoading) return;
 
     _inputController.clear();
-    _addMessage(text, isUser: true, type: 'goal');
-
-    setState(() => _isLoading = true);
-
-    try {
-      final provider = Provider.of<AppDataProvider>(context, listen: false);
-      final habitNames = provider.getAllHabitNames();
-      
-      final response = await _geminiService.suggestHabits(habitNames, text);
-      _addMessage(response, type: 'suggestion');
-    } catch (e) {
-      _addMessage('Sorry, I encountered an error. Please try again.', type: 'error');
-    } finally {
-      setState(() => _isLoading = false);
-    }
+    await coach.sendMessage(text);
+    _scrollToBottom();
   }
 
-  Future<void> _getQuickInsight(String type) async {
-    setState(() => _isLoading = true);
+  Future<void> _sendQuickAction(AICoachProvider coach, String actionType) async {
+    if (coach.isLoading) return;
+    await coach.sendQuickAction(actionType);
+    _scrollToBottom();
+  }
 
-    try {
-      final provider = Provider.of<AppDataProvider>(context, listen: false);
-      final stats = provider.getStatistics();
-      String response;
-
-      switch (type) {
-        case 'motivation':
-          _addMessage('💪 Give me motivation!', isUser: true);
-          response = await _geminiService.getDailyInsight(
-            provider.data.toJson(),
-            stats.currentStreak,
-            stats.overallCompletionRate,
-          );
-          break;
-        case 'weekly':
-          _addMessage('📊 Weekly recap please', isUser: true);
-          response = await _geminiService.getWeeklyRecap(
-            provider.data.toJson(),
-            stats.habitCompletionCounts,
-            stats.totalWorkTimeSeconds,
-            stats.completedDailyTasks,
-            stats.totalDailyTasks,
-          );
-          break;
-        case 'tips':
-          _addMessage('💡 Quick tips', isUser: true);
-          final recentReflections = provider.data.reflections.entries
-              .toList()
-              ..sort((a, b) => b.key.compareTo(a.key));
-          final reflectionTexts = recentReflections
-              .take(3)
-              .map((e) => e.value)
-              .where((text) => text.isNotEmpty)
-              .toList();
-          response = await _geminiService.getSmartRecommendations(
-            provider.data.toJson(),
-            {
-              'completionRate': stats.overallCompletionRate,
-              'currentStreak': stats.currentStreak,
-              'workHours': stats.totalWorkTimeSeconds / 3600,
-              'taskCompletion': stats.dailyTaskCompletionRate,
-            },
-            reflectionTexts,
-          );
-          break;
-        default:
-          response = 'Unknown action';
+  Future<void> _toggleVoiceInput() async {
+    if (!_speechReady) {
+      await _initializeSpeech();
+      if (!_speechReady && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Voice input is unavailable on this device right now.'),
+          ),
+        );
       }
+      return;
+    }
 
-      _addMessage(response, type: type);
-    } catch (e) {
-      _addMessage('Sorry, something went wrong. Please try again.', type: 'error');
-    } finally {
-      setState(() => _isLoading = false);
+    if (_isListening) {
+      await _speechToText.stop();
+      if (!mounted) return;
+      setState(() {
+        _isListening = false;
+      });
+      return;
+    }
+
+    setState(() {
+      _isListening = true;
+    });
+
+    await _speechToText.listen(
+      listenFor: const Duration(seconds: 35),
+      pauseFor: const Duration(seconds: 4),
+      listenOptions: stt.SpeechListenOptions(partialResults: true),
+      onResult: (result) {
+        if (!mounted) return;
+        final transcript = result.recognizedWords.trim();
+        if (transcript.isEmpty) return;
+        _inputController.text = transcript;
+        _inputController.selection = TextSelection.collapsed(
+          offset: transcript.length,
+        );
+        setState(() {});
+      },
+    );
+  }
+
+  Future<void> _openHistoryScreen() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute(builder: (_) => const AIHistoryScreen()),
+    );
+    if (!mounted) return;
+    _scrollToBottom();
+  }
+
+  void _syncPendingContext(AICoachProvider coach) {
+    final pendingContext = coach.consumePendingCoachContext();
+    if (pendingContext == null || pendingContext.trim().isEmpty) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _inputController.text = pendingContext.trim();
+      _inputController.selection = TextSelection.collapsed(
+        offset: _inputController.text.length,
+      );
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Daily motivation moved into your coach draft.'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    });
+  }
+
+  void _syncAutoScroll(AICoachProvider coach) {
+    final currentCount = coach.activeMessages.length;
+    final currentLoading = coach.isLoading;
+
+    if (currentCount != _lastMessageCount || currentLoading != _lastLoadingState) {
+      _lastMessageCount = currentCount;
+      _lastLoadingState = currentLoading;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _scrollToBottom());
     }
   }
 
-  void _showApiKeyDialog() {
+  Future<bool> _saveApiKey(AICoachProvider coach) async {
+    final raw = _apiKeyController.text.trim();
+    if (raw.isEmpty) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a Gemini API key first.'),
+          backgroundColor: Color(0xFFD32F2F),
+        ),
+      );
+      return false;
+    }
+
+    try {
+      await coach.saveApiKey(raw);
+      _apiKeyController.clear();
+
+      if (!mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('API key saved.'),
+          backgroundColor: Color(0xFF2E7D32),
+        ),
+      );
+      return true;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save API key: $e'),
+          backgroundColor: const Color(0xFFD32F2F),
+        ),
+      );
+      return false;
+    }
+  }
+
+  Future<void> _confirmClearHistory(AICoachProvider coach) async {
+    final shouldClear = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Clear AI History?'),
+          content: const Text(
+            'This removes all saved conversations from local storage. This cannot be undone.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Clear'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (shouldClear != true) return;
+    await coach.clearHistory();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('AI history cleared.')),
+    );
+  }
+
+  void _showApiKeyDialog(AICoachProvider coach) {
     showDialog(
       context: context,
       builder: (context) {
@@ -260,85 +292,9 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () {
-                _saveApiKey();
-                Navigator.pop(context);
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF9C27B0),
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  void _showSettingsDialog() {
-    showDialog(
-      context: context,
-      builder: (context) {
-        int tempLifetime = _messageLifetimeMinutes;
-        return AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.timer, color: Color(0xFF9C27B0)),
-              SizedBox(width: 8),
-              Text('Chat Settings'),
-            ],
-          ),
-          content: StatefulBuilder(
-            builder: (context, setDialogState) {
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text('Messages auto-delete after:'),
-                  const SizedBox(height: 16),
-                  DropdownButton<int>(
-                    value: tempLifetime,
-                    isExpanded: true,
-                    items: const [
-                      DropdownMenuItem(value: 5, child: Text('5 minutes')),
-                      DropdownMenuItem(value: 15, child: Text('15 minutes')),
-                      DropdownMenuItem(value: 30, child: Text('30 minutes')),
-                      DropdownMenuItem(value: 60, child: Text('1 hour')),
-                      DropdownMenuItem(value: 1440, child: Text('24 hours')),
-                    ],
-                    onChanged: (value) {
-                      setDialogState(() => tempLifetime = value!);
-                    },
-                  ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: double.infinity,
-                    child: OutlinedButton.icon(
-                      onPressed: () {
-                        setState(() {
-                          _messages.clear();
-                          _addWelcomeMessage();
-                        });
-                        Navigator.pop(context);
-                      },
-                      icon: const Icon(Icons.delete_sweep, color: Colors.red),
-                      label: const Text('Clear Chat'),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
-                    ),
-                  ),
-                ],
-              );
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                setState(() => _messageLifetimeMinutes = tempLifetime);
+              onPressed: () async {
+                final saved = await _saveApiKey(coach);
+                if (!context.mounted || !saved) return;
                 Navigator.pop(context);
               },
               style: ElevatedButton.styleFrom(
@@ -356,120 +312,147 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('AI Coach'),
-        backgroundColor: const Color(0xFF9C27B0),
-        foregroundColor: Colors.white,
-        elevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.timer_outlined),
-            onPressed: _showSettingsDialog,
-            tooltip: 'Settings',
+    return Consumer<AICoachProvider>(
+      builder: (context, coach, child) {
+        _syncPendingContext(coach);
+        _syncAutoScroll(coach);
+
+        return Scaffold(
+          appBar: AppBar(
+            title: const Text('AI Coach'),
+            backgroundColor: const Color(0xFF9C27B0),
+            foregroundColor: Colors.white,
+            elevation: 0,
+            actions: [
+              IconButton(
+                icon: const Icon(Icons.history),
+                onPressed: _openHistoryScreen,
+                tooltip: 'History',
+              ),
+              IconButton(
+                icon: const Icon(Icons.key),
+                onPressed: () => _showApiKeyDialog(coach),
+                tooltip: 'API Key',
+              ),
+              PopupMenuButton<String>(
+                onSelected: (value) async {
+                  if (value == 'new') {
+                    await coach.startNewConversation();
+                  }
+                  if (value == 'clear') {
+                    await _confirmClearHistory(coach);
+                  }
+                },
+                itemBuilder: (context) => const [
+                  PopupMenuItem(
+                    value: 'new',
+                    child: Text('New conversation'),
+                  ),
+                  PopupMenuItem(
+                    value: 'clear',
+                    child: Text('Clear all history'),
+                  ),
+                ],
+              ),
+            ],
           ),
-          IconButton(
-            icon: const Icon(Icons.key),
-            onPressed: _showApiKeyDialog,
-            tooltip: 'API Key',
-          ),
-        ],
-      ),
-      body: !_hasApiKey ? _buildApiKeySetup() : _buildChatInterface(),
+          body: coach.isInitialized
+              ? _buildChatInterface(coach)
+              : const Center(child: CircularProgressIndicator()),
+        );
+      },
     );
   }
 
-  Widget _buildApiKeySetup() {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              padding: const EdgeInsets.all(24),
-              decoration: BoxDecoration(
-                color: const Color(0xFF9C27B0).withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(
-                Icons.psychology,
-                size: 64,
-                color: Color(0xFF9C27B0),
-              ),
-            ),
-            const SizedBox(height: 32),
-            const Text(
-              'Setup AI Coach',
-              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            const Text(
-              'Add your free Google Gemini API key to get personalized coaching',
-              textAlign: TextAlign.center,
-              style: TextStyle(fontSize: 14, color: Colors.grey),
-            ),
-            const SizedBox(height: 32),
-            ElevatedButton.icon(
-              onPressed: _showApiKeyDialog,
-              icon: const Icon(Icons.key),
-              label: const Text('Add API Key'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: const Color(0xFF9C27B0),
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
+  Widget _buildChatInterface(AICoachProvider coach) {
+    final messages = coach.activeMessages;
 
-  Widget _buildChatInterface() {
     return Column(
       children: [
-        // Quick Action Chips
+        if (!coach.hasApiKey)
+          Container(
+            width: double.infinity,
+            margin: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFFFF8E1),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFFFD54F)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.info_outline, color: Color(0xFFF57F17)),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Add a Gemini API key for personalized responses.',
+                    style: TextStyle(fontSize: 13),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _showApiKeyDialog(coach),
+                  child: const Text('Add key'),
+                ),
+              ],
+            ),
+          ),
+
         Container(
           padding: const EdgeInsets.all(12),
-          color: const Color(0xFF9C27B0).withOpacity(0.05),
+          color: const Color(0xFF9C27B0).withValues(alpha: 0.05),
           child: SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                _buildQuickActionChip('💪 Motivation', 'motivation'),
+                _buildQuickActionChip(
+                  label: 'Give me a pep talk',
+                  onTap: () => _sendQuickAction(coach, 'pep_talk'),
+                  isEnabled: !coach.isLoading,
+                ),
                 const SizedBox(width: 8),
-                _buildQuickActionChip('📊 Weekly', 'weekly'),
+                _buildQuickActionChip(
+                  label: 'What should I focus on today?',
+                  onTap: () => _sendQuickAction(coach, 'focus_today'),
+                  isEnabled: !coach.isLoading,
+                ),
                 const SizedBox(width: 8),
-                _buildQuickActionChip('💡 Tips', 'tips'),
+                _buildQuickActionChip(
+                  label: coach.dynamicQuickActionLabel,
+                  onTap: () => _sendQuickAction(coach, 'dynamic'),
+                  isEnabled: !coach.isLoading,
+                ),
+                const SizedBox(width: 8),
+                _buildQuickActionChip(
+                  label: 'Roast my lazy day',
+                  onTap: () => _sendQuickAction(coach, 'roast_lazy_day'),
+                  isEnabled: !coach.isLoading,
+                ),
               ],
             ),
           ),
         ),
-        
-        // Chat Messages
+
         Expanded(
           child: ListView.builder(
             controller: _scrollController,
             padding: const EdgeInsets.all(16),
-            itemCount: _messages.length + (_isLoading ? 1 : 0),
+            itemCount: messages.length + (coach.isLoading ? 1 : 0),
             itemBuilder: (context, index) {
-              if (index == _messages.length && _isLoading) {
+              if (index == messages.length && coach.isLoading) {
                 return _buildTypingIndicator();
               }
-              return _buildMessageBubble(_messages[index]);
+              return _buildMessageBubble(messages[index]);
             },
           ),
         ),
-        
-        // Input Area
+
         Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
             color: Colors.white,
             boxShadow: [
               BoxShadow(
-                color: Colors.grey.withOpacity(0.15),
+                color: Colors.grey.withValues(alpha: 0.15),
                 blurRadius: 8,
                 offset: const Offset(0, -2),
               ),
@@ -496,7 +479,27 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
                       ),
                     ),
                     textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _sendMessage(),
+                    onSubmitted: (_) => _sendMessage(coach),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: _isListening
+                        ? const Color(0xFFD32F2F)
+                        : Colors.grey.shade300,
+                    shape: BoxShape.circle,
+                  ),
+                  child: IconButton(
+                    icon: Icon(
+                      _isListening ? Icons.mic : Icons.mic_none,
+                      color: _isListening ? Colors.white : Colors.black87,
+                      size: 20,
+                    ),
+                    onPressed: coach.isLoading ? null : _toggleVoiceInput,
+                    tooltip: _isListening
+                        ? 'Stop voice input'
+                        : 'Start voice input',
                   ),
                 ),
                 const SizedBox(width: 8),
@@ -507,7 +510,7 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
                   ),
                   child: IconButton(
                     icon: const Icon(Icons.send, color: Colors.white, size: 20),
-                    onPressed: _isLoading ? null : _sendMessage,
+                    onPressed: coach.isLoading ? null : () => _sendMessage(coach),
                   ),
                 ),
               ],
@@ -518,10 +521,14 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
     );
   }
 
-  Widget _buildQuickActionChip(String label, String type) {
+  Widget _buildQuickActionChip({
+    required String label,
+    required VoidCallback onTap,
+    required bool isEnabled,
+  }) {
     return ActionChip(
       label: Text(label, style: const TextStyle(fontSize: 13)),
-      onPressed: _isLoading ? null : () => _getQuickInsight(type),
+      onPressed: isEnabled ? onTap : null,
       backgroundColor: Colors.white,
       side: const BorderSide(color: Color(0xFF9C27B0), width: 1),
       labelStyle: const TextStyle(color: Color(0xFF9C27B0)),
@@ -529,7 +536,7 @@ class _AICoachScreenState extends State<AICoachScreen> with AutomaticKeepAliveCl
     );
   }
 
-  Widget _buildMessageBubble(ChatMessage message) {
+  Widget _buildMessageBubble(AIChatMessage message) {
     final isUser = message.isUser;
     final timeAgo = _getTimeAgo(message.timestamp);
     
